@@ -32,9 +32,9 @@ pub struct DiffCaptureSession {
     baseline_registers: HashMap<String, u16>, // key: "slave:addr"
     current_registers: HashMap<String, (u16, u64)>, // key -> (value, change_time)
     register_notches: HashMap<String, u16>,   // ambient fluctuating bitmask per register
-    baseline_can_slots: HashMap<CanId, [u8; 8]>,
-    current_can_slots: HashMap<CanId, ([u8; 8], u64)>,
-    can_notches: HashMap<CanId, [u8; 8]>, // ambient fluctuating bitmask per CAN ID
+    baseline_can_slots: HashMap<CanId, ([u8; 64], usize)>,
+    current_can_slots: HashMap<CanId, ([u8; 64], usize, u64)>,
+    can_notches: HashMap<CanId, [u8; 64]>, // ambient fluctuating bitmask per CAN ID
 }
 
 impl DiffCaptureSession {
@@ -67,8 +67,8 @@ impl DiffCaptureSession {
             self.baseline_registers.insert(k.clone(), *v);
         }
         self.baseline_can_slots.clear();
-        for (k, (v, _)) in &self.current_can_slots {
-            self.baseline_can_slots.insert(*k, *v);
+        for (k, (v, dlc, _)) in &self.current_can_slots {
+            self.baseline_can_slots.insert(*k, (*v, *dlc));
         }
     }
 
@@ -89,23 +89,24 @@ impl DiffCaptureSession {
         self.current_registers.insert(key, (val, timestamp_us));
     }
 
-    /// Record an incoming CAN frame payload with automatic ambient noise notching
+    /// Record an incoming CAN frame payload with automatic ambient noise notching (supports up to 64B CAN-FD)
     pub fn record_can_frame(&mut self, id: CanId, data: &[u8], timestamp_us: u64) {
-        let mut bytes = [0u8; 8];
-        let len = data.len().min(8);
+        let mut bytes = [0u8; 64];
+        let len = data.len().min(64);
         bytes[..len].copy_from_slice(&data[..len]);
 
         if !self.is_active {
             // While monitoring baseline, automatically notch any bits that fluctuate on their own
-            if let Some(&prev_bytes) = self.baseline_can_slots.get(&id) {
-                let notch = self.can_notches.entry(id).or_insert([0u8; 8]);
-                for i in 0..8 {
+            if let Some((prev_bytes, _)) = self.baseline_can_slots.get(&id) {
+                let notch = self.can_notches.entry(id).or_insert([0u8; 64]);
+                for i in 0..len {
                     notch[i] |= bytes[i] ^ prev_bytes[i];
                 }
             }
-            self.baseline_can_slots.insert(id, bytes);
+            self.baseline_can_slots.insert(id, (bytes, len));
         }
-        self.current_can_slots.insert(id, (bytes, timestamp_us));
+        self.current_can_slots
+            .insert(id, (bytes, len, timestamp_us));
     }
 
     /// Manually apply a notch mask to suppress noisy ambient bits on a specific register
@@ -117,8 +118,16 @@ impl DiffCaptureSession {
 
     /// Manually apply a notch mask to suppress noisy ambient bits on a specific CAN arbitration ID
     pub fn notch_can_id(&mut self, id: CanId, mask: [u8; 8]) {
-        let entry = self.can_notches.entry(id).or_insert([0u8; 8]);
+        let entry = self.can_notches.entry(id).or_insert([0u8; 64]);
         for i in 0..8 {
+            entry[i] |= mask[i];
+        }
+    }
+
+    /// Manually apply a full 64-byte notch mask for CAN-FD arbitration IDs
+    pub fn notch_can_id_64(&mut self, id: CanId, mask: [u8; 64]) {
+        let entry = self.can_notches.entry(id).or_insert([0u8; 64]);
+        for i in 0..64 {
             entry[i] |= mask[i];
         }
     }
@@ -149,15 +158,20 @@ impl DiffCaptureSession {
         }
 
         // 2. Check CAN frame deltas with ambient noise suppression
-        for (id, (current_bytes, change_time)) in &self.current_can_slots {
-            let baseline_bytes = self.baseline_can_slots.get(id).copied().unwrap_or([0; 8]);
-            let notch_mask = self.can_notches.get(id).copied().unwrap_or([0u8; 8]);
+        for (id, (current_bytes, dlc, change_time)) in &self.current_can_slots {
+            let (baseline_bytes, base_dlc) = self
+                .baseline_can_slots
+                .get(id)
+                .copied()
+                .unwrap_or(([0; 64], *dlc));
+            let notch_mask = self.can_notches.get(id).copied().unwrap_or([0u8; 64]);
+            let active_len = (*dlc).max(base_dlc);
 
-            let mut raw_diff = [0u8; 8];
-            let mut active_diff = [0u8; 8];
+            let mut raw_diff = [0u8; 64];
+            let mut active_diff = [0u8; 64];
             let mut has_active_mutation = false;
 
-            for i in 0..8 {
+            for i in 0..active_len {
                 raw_diff[i] = current_bytes[i] ^ baseline_bytes[i];
                 active_diff[i] = raw_diff[i] & !notch_mask[i];
                 if active_diff[i] != 0 {
@@ -172,9 +186,9 @@ impl DiffCaptureSession {
                         CanId::Standard(v) => format!("CAN 0x{:03X}", v),
                         CanId::Extended(v) => format!("CAN 0x{:08X}", v),
                     },
-                    baseline_value_hex: hex_str(&baseline_bytes),
-                    mutated_value_hex: hex_str(current_bytes),
-                    bitmask_diff: hex_str(&active_diff),
+                    baseline_value_hex: hex_str(&baseline_bytes[..active_len]),
+                    mutated_value_hex: hex_str(&current_bytes[..active_len]),
+                    bitmask_diff: hex_str(&active_diff[..active_len]),
                     first_change_timestamp_us: *change_time,
                 });
             }
@@ -195,7 +209,7 @@ impl DiffCaptureSession {
     }
 }
 
-fn hex_str(bytes: &[u8; 8]) -> String {
+fn hex_str(bytes: &[u8]) -> String {
     bytes
         .iter()
         .map(|b| format!("{:02X}", b))

@@ -13,26 +13,35 @@ pub struct BusLoadReport {
     pub is_overloaded: bool,
 }
 
-/// Calculate nominal on-wire bit count for a CAN frame including bit-stuffing approximation
+/// Calculate nominal on-wire bit count for a CAN 2.0 or CAN-FD frame including bit-stuffing approximation (ISO 11898-1:2015)
 pub fn calculate_frame_bit_length(frame: &CanFrame) -> u32 {
-    let dlc = frame.data.len().min(8) as u32;
+    let payload_bytes = if frame.is_fd {
+        frame.data.len().min(64) as u32
+    } else {
+        frame.data.len().min(8) as u32
+    };
 
-    match frame.id {
-        CanId::Standard(_) => {
-            // Standard frame: 47 fixed/overhead bits + 8 * DLC data bits
-            // Stuffed bits: SOF(1) + ID(11) + RTR(1) + IDE(1) + r0(1) + DLC(4) + Data(8*DLC) + CRC(15) = 34 + 8*DLC
-            // Approximate worst-case stuffing adds up to ~20%
-            let stuffed_base = 34 + (8 * dlc);
-            let estimated_stuff_bits = stuffed_base / 5;
-            let fixed_bits = 13; // CRC del(1), ACK(2), EOF(7), Intermission(3)
-            stuffed_base + estimated_stuff_bits + fixed_bits
-        }
-        CanId::Extended(_) => {
-            // Extended frame: 67 fixed/overhead bits + 8 * DLC data bits
-            let stuffed_base = 54 + (8 * dlc);
-            let estimated_stuff_bits = stuffed_base / 5;
-            let fixed_bits = 13;
-            stuffed_base + estimated_stuff_bits + fixed_bits
+    if frame.is_fd {
+        // CAN-FD uses 17-bit CRC for payloads <= 16B, and 21-bit CRC for 20..=64B
+        let crc_bits = if payload_bytes <= 16 { 17 } else { 21 };
+        let fixed_stuff_in_crc = (crc_bits / 4) + 1;
+        let arb_bits = match frame.id {
+            CanId::Standard(_) => 29,
+            CanId::Extended(_) => 49,
+        };
+        let data_bits = payload_bytes * 8;
+        let dynamic_stuff = (arb_bits + data_bits) / 5;
+        arb_bits + data_bits + crc_bits + fixed_stuff_in_crc + dynamic_stuff + 11
+    } else {
+        match frame.id {
+            CanId::Standard(_) => {
+                let stuffed_base = 34 + (8 * payload_bytes);
+                stuffed_base + (stuffed_base / 5) + 13
+            }
+            CanId::Extended(_) => {
+                let stuffed_base = 54 + (8 * payload_bytes);
+                stuffed_base + (stuffed_base / 5) + 13
+            }
         }
     }
 }
@@ -133,5 +142,17 @@ mod tests {
         assert_eq!(rep.bitrate, 500_000);
         assert!((rep.bus_load_percent - 26.0).abs() < 2.0);
         assert!(!rep.is_overloaded);
+    }
+
+    #[test]
+    fn test_can_fd_frame_bit_calculation() {
+        let fd_frame_64 = CanFrame::new_standard_fd(0x100, &[0xAA; 64]).with_brs_esi(true, false);
+        let bits = calculate_frame_bit_length(&fd_frame_64);
+        // arb(29) + data(512) + crc(21) + fixed_stuff(6) + dyn_stuff(108) + 11 = 687
+        assert!(bits > 600 && bits < 750);
+
+        let fd_frame_16 = CanFrame::new_standard_fd(0x100, &[0x55; 16]);
+        let bits_16 = calculate_frame_bit_length(&fd_frame_16);
+        assert!(bits_16 > 150 && bits_16 < 300);
     }
 }

@@ -117,6 +117,8 @@ impl SocketCanDriver {
                     dlc: dlc as u8,
                     data,
                     is_fd: false,
+                    brs: false,
+                    esi: false,
                     is_rtr,
                     is_error: is_err,
                 };
