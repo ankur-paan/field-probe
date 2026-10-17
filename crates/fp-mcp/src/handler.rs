@@ -1,6 +1,8 @@
-use fp_core::{AdapterCapabilities, BusProtocol, SafetyPermit, SafetyTier};
+use fp_core::{AdapterCapabilities, BusProtocol, CanFrame, SafetyPermit, SafetyTier};
 use fp_crypto::{KeyRing, KeyType, ManagedKey};
-use fp_dissectors::{ComplianceReport, ModbusRtuAdu};
+use fp_dissectors::{
+    BacnetMstpFrame, ComplianceReport, J1708Message, KnxMessage, MbusMessage, ModbusRtuAdu,
+};
 use fp_inference::InferenceEngine;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -80,6 +82,7 @@ impl McpServerState {
             "load_security_key" => self.tool_load_security_key(arguments),
             "request_active_probe" => self.tool_request_active_probe(arguments),
             "export_bus_artifacts" => self.tool_export_bus_artifacts(arguments),
+            "load_bus_database" => self.tool_load_bus_database(arguments),
             _ => Err(McpError::new(-32601, format!("Unknown tool '{}'", name))),
         }
     }
@@ -341,10 +344,64 @@ impl McpServerState {
         }))
     }
 
+    fn tool_load_bus_database(
+        &mut self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
+        let content = args
+            .get("content")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| McpError::invalid_params("Missing required 'content' parameter"))?;
+
+        self.inference_engine
+            .load_dbc(content)
+            .map_err(|e| McpError::new(-32603, format!("Failed to parse DBC content: {}", e)))?;
+
+        let messages_count = self
+            .inference_engine
+            .dbc_database
+            .as_ref()
+            .map(|db| db.messages.len())
+            .unwrap_or(0);
+
+        Ok(json!({
+            "status": "success",
+            "message": "Vector DBC database loaded into inference engine",
+            "messages_defined": messages_count
+        }))
+    }
+
     /// Feed a Modbus RTU frame into the inference engine and compliance auditor
     pub fn feed_modbus_frame(&mut self, adu: &ModbusRtuAdu, timestamp_us: u64) {
         self.compliance_report.audit_modbus_adu(adu);
         self.inference_engine.ingest_modbus_frame(adu, timestamp_us);
+    }
+
+    /// Feed a CAN / CAN-FD frame into the inference engine
+    pub fn feed_can_frame(&mut self, frame: &CanFrame, timestamp_us: u64) {
+        self.inference_engine.ingest_can_frame(frame, timestamp_us);
+    }
+
+    /// Feed a BACnet MS/TP frame into the inference engine
+    pub fn feed_bacnet_frame(&mut self, frame: &BacnetMstpFrame, timestamp_us: u64) {
+        self.inference_engine
+            .ingest_bacnet_frame(frame, timestamp_us);
+    }
+
+    /// Feed a SAE J1708 frame into the inference engine
+    pub fn feed_j1708_frame(&mut self, frame: &J1708Message, timestamp_us: u64) {
+        self.inference_engine
+            .ingest_j1708_frame(frame, timestamp_us);
+    }
+
+    /// Feed an M-Bus telegram into the inference engine
+    pub fn feed_mbus_frame(&mut self, frame: &MbusMessage, timestamp_us: u64) {
+        self.inference_engine.ingest_mbus_frame(frame, timestamp_us);
+    }
+
+    /// Feed a KNX TP1 telegram into the inference engine
+    pub fn feed_knx_frame(&mut self, frame: &KnxMessage, timestamp_us: u64) {
+        self.inference_engine.ingest_knx_frame(frame, timestamp_us);
     }
 }
 
@@ -460,5 +517,31 @@ mod tests {
             .execute_tool("request_active_probe", &signed_args)
             .expect("Signed probe succeeds");
         assert_eq!(res["permit_id"], "valid-token-123");
+    }
+
+    #[test]
+    fn test_mcp_load_bus_database_and_multi_protocol_catalog() {
+        let mut state = McpServerState::new();
+
+        // 1. Load DBC database
+        let dbc_content = r#"
+BO_ 256 EngineTelemetry: 8 EngineECU
+ SG_ VehicleSpeed : 0|16@1+ (0.01,0) [0|300] "km/h" Gateway
+"#;
+        let res = state
+            .execute_tool("load_bus_database", &json!({ "content": dbc_content }))
+            .expect("DBC loaded");
+        assert_eq!(res["status"], "success");
+        assert_eq!(res["messages_defined"], 1);
+
+        // 2. Feed CAN frame matching DBC
+        let f_can = CanFrame::new_standard(256, &[0x10, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        state.feed_can_frame(&f_can, 1_000_000);
+
+        // 3. Query catalog via MCP
+        let cat_res = state
+            .execute_tool("get_register_catalog", &json!({}))
+            .expect("Catalog queried");
+        assert!(cat_res["total_entries"].as_u64().unwrap() >= 1);
     }
 }

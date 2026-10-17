@@ -39,7 +39,7 @@ The workspace contains 10 decoupled Rust crates under `crates/`:
 | `fp-dissectors` | Protocol parsers and standards compliance auditor | Zero-panic parsing of noisy line bytes |
 | `fp-crypto` | Security key manager and Shannon entropy calculator | Flags encrypted payloads (&gt;7.2 bits/byte) |
 | `fp-inference` | Multi-representation decoder and signal catalog | Evaluates temporal plausibility |
-| `fp-mcp` | Model Context Protocol server exposing 8 tools | Strict JSON schemas for AI agents |
+| `fp-mcp` | Model Context Protocol server exposing 10 tools | Strict JSON schemas for AI agents |
 | `fp-server` | Axum HTTP REST and WebSocket telemetry daemon | Real-time event streaming |
 | `fp-cli` | Ratatui terminal dashboard and CLI binary | Standalone executable |
 

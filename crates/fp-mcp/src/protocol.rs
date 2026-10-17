@@ -167,7 +167,7 @@ mod tests {
         let resp_str = process_json_rpc(&mut state, list_req).expect("Response generated");
         let resp: serde_json::Value = serde_json::from_str(&resp_str).expect("Valid JSON");
         let tools = resp["result"]["tools"].as_array().expect("Tools array");
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 10);
     }
 
     #[test]

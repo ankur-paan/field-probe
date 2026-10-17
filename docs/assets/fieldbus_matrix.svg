@@ -1,0 +1,101 @@
+<svg width="740" height="340" viewBox="0 0 740 340" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="matrix-arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#2563eb"/>
+    </marker>
+  </defs>
+
+  <!-- Title Banner -->
+  <rect x="20" y="10" width="700" height="36" rx="6" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+  <text x="370" y="33" text-anchor="middle" fill="#1e40af" font-family="system-ui, sans-serif" font-weight="700" font-size="13">FIELD-PROBE UNIVERSAL FIELDBUS &amp; EQUIPMENT EXPANSION MATRIX</text>
+
+  <!-- Column 1: Marine & Ag -->
+  <rect x="20" y="60" width="130" height="200" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <rect x="20" y="60" width="130" height="28" rx="6" fill="#0284c7"/>
+  <text x="85" y="79" text-anchor="middle" fill="#ffffff" font-family="system-ui, sans-serif" font-weight="700" font-size="11">Marine &amp; Ag</text>
+  <rect x="28" y="96" width="114" height="32" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="85" y="112" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">NMEA 2000</text>
+  <text x="85" y="123" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">Fast-Packet PGNs</text>
+  <rect x="28" y="136" width="114" height="32" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="85" y="152" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">ISOBUS ETP</text>
+  <text x="85" y="163" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">16 MB Multi-Packet</text>
+  <rect x="28" y="176" width="114" height="32" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="85" y="192" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">Engine Rapid</text>
+  <text x="85" y="203" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">RPM, Boost, Trim</text>
+  <rect x="28" y="216" width="114" height="36" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="85" y="231" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">Fluid &amp; Battery</text>
+  <text x="85" y="244" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">Levels &amp; Volts</text>
+
+  <!-- Column 2: Heavy-Duty -->
+  <rect x="162" y="60" width="130" height="200" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <rect x="162" y="60" width="130" height="28" rx="6" fill="#b45309"/>
+  <text x="227" y="79" text-anchor="middle" fill="#ffffff" font-family="system-ui, sans-serif" font-weight="700" font-size="11">Heavy-Duty</text>
+  <rect x="170" y="96" width="114" height="32" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="227" y="112" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">SAE J1939</text>
+  <text x="227" y="123" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">BAM, DM1, VIN</text>
+  <rect x="170" y="136" width="114" height="32" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="227" y="152" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">SAE J1708</text>
+  <text x="227" y="163" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">9600 Bd Two's Comp</text>
+  <rect x="170" y="176" width="114" height="32" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="227" y="192" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">SAE J1587</text>
+  <text x="227" y="203" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">Speed, RPM, Oil</text>
+  <rect x="170" y="216" width="114" height="36" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="227" y="231" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">J1939-81</text>
+  <text x="227" y="244" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">Address Claiming</text>
+
+  <!-- Column 3: Factory Motion -->
+  <rect x="304" y="60" width="130" height="200" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <rect x="304" y="60" width="130" height="28" rx="6" fill="#4f46e5"/>
+  <text x="369" y="79" text-anchor="middle" fill="#ffffff" font-family="system-ui, sans-serif" font-weight="700" font-size="11">Factory Motion</text>
+  <rect x="312" y="96" width="114" height="32" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="369" y="112" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">DeviceNet</text>
+  <text x="369" y="123" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">CIP Master/Slave</text>
+  <rect x="312" y="136" width="114" height="32" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="369" y="152" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">CANopen</text>
+  <text x="369" y="163" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">SDO, PDO, Heartbeat</text>
+  <rect x="312" y="176" width="114" height="32" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="369" y="192" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">Poll &amp; Strobe</text>
+  <text x="369" y="203" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">Group 2 Connection</text>
+  <rect x="312" y="216" width="114" height="36" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="369" y="231" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">Fragmentation</text>
+  <text x="369" y="244" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">Explicit CIP Chunks</text>
+
+  <!-- Column 4: Process & Transmitters -->
+  <rect x="446" y="60" width="130" height="200" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <rect x="446" y="60" width="130" height="28" rx="6" fill="#059669"/>
+  <text x="511" y="79" text-anchor="middle" fill="#ffffff" font-family="system-ui, sans-serif" font-weight="700" font-size="11">Process &amp; Power</text>
+  <rect x="454" y="96" width="114" height="32" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="511" y="112" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">PROFIBUS DP</text>
+  <text x="511" y="123" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">SD1, SD2, SD3 FCS</text>
+  <rect x="454" y="136" width="114" height="32" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="511" y="152" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">HART FSK</text>
+  <text x="511" y="163" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">Bell 202 1200 Bd</text>
+  <rect x="454" y="176" width="114" height="32" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="511" y="192" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">Modbus RTU/TCP</text>
+  <text x="511" y="203" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">MEI 0x2B Device ID</text>
+  <rect x="454" y="216" width="114" height="36" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="511" y="231" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">DNP3 (IEEE 1815)</text>
+  <text x="511" y="244" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">FT3 Substation CRC</text>
+
+  <!-- Column 5: BMS & Utility -->
+  <rect x="588" y="60" width="132" height="200" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <rect x="588" y="60" width="132" height="28" rx="6" fill="#7c3aed"/>
+  <text x="654" y="79" text-anchor="middle" fill="#ffffff" font-family="system-ui, sans-serif" font-weight="700" font-size="11">BMS &amp; Utility</text>
+  <rect x="596" y="96" width="116" height="32" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="654" y="112" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">BACnet MS/TP</text>
+  <text x="654" y="123" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">APDU &amp; Float Props</text>
+  <rect x="596" y="136" width="116" height="32" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="654" y="152" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">M-Bus (EN 13757)</text>
+  <text x="654" y="163" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">Heat, Water, Gas</text>
+  <rect x="596" y="176" width="116" height="32" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="654" y="192" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">KNX TP1</text>
+  <text x="654" y="203" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">Room Telemetry</text>
+  <rect x="596" y="216" width="116" height="36" rx="4" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="654" y="231" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="600" font-size="10">Token Arbitration</text>
+  <text x="654" y="244" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">Poll For Master</text>
+
+  <!-- Bottom Common Engine Bar -->
+  <rect x="20" y="275" width="700" height="50" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <text x="370" y="297" text-anchor="middle" fill="#ffffff" font-family="system-ui, sans-serif" font-weight="700" font-size="12">UNIFIED SEMANTIC INFERENCE CATALOG &amp; ZERO-PANIC DISSECTOR LAYER</text>
+  <text x="370" y="313" text-anchor="middle" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="10">Tier-0 Passive Safe Discovery • Welford Real-Time Jitter Tracking • Vector DBC Decoding • Diff-Capture Isolation</text>
+</svg>

@@ -15,11 +15,16 @@ pub struct J1939Header {
 }
 
 /// Standard J1939 Parameter Group Numbers (PGNs)
-pub const PGN_EEC1: u32 = 61444; // 0x00F004 - Electronic Engine Controller 1
+pub const PGN_EBC1: u32 = 61441; // 0x00F001 - Electronic Brake Controller 1
+pub const PGN_ETC1: u32 = 61442; // 0x00F002 - Electronic Transmission Controller 1
 pub const PGN_EEC2: u32 = 61443; // 0x00F003 - Electronic Engine Controller 2
+pub const PGN_EEC1: u32 = 61444; // 0x00F004 - Electronic Engine Controller 1
+pub const PGN_ETC2: u32 = 61445; // 0x00F005 - Electronic Transmission Controller 2
+pub const PGN_HOURS: u32 = 65253; // 0x00FEE5 - Engine Hours & Revolutions
 pub const PGN_ET1: u32 = 65262; // 0x00FEEE - Engine Temperature 1
 pub const PGN_CCVS1: u32 = 65265; // 0x00FEF1 - Cruise Control/Vehicle Speed 1
-pub const PGN_ADDRESS_CLAIMED: u32 = 60928; // 0x00EE00
+pub const PGN_FUEL: u32 = 65266; // 0x00FEF2 - Fuel Economy
+pub const PGN_ADDRESS_CLAIMED: u32 = 60928; // 0x00EE00 - Address Claimed
 
 // J1939 Transport Protocol PGNs
 pub const PGN_TP_CM: u32 = 60416; // 0x00EC00 - Transport Protocol Connection Management
@@ -31,6 +36,16 @@ pub const PGN_COMPONENT_ID: u32 = 65259; // 0x00FEEB - Component Identification
 pub const PGN_VIN: u32 = 65260; // 0x00FEEC - Vehicle Identification Number
 pub const PGN_SOFTWARE_ID: u32 = 65242; // 0x00FEDA - Software Identification
 
+// NMEA 2000 Marine PGNs
+pub const PGN_NMEA_ENGINE_RAPID: u32 = 127488; // 0x01F200 - Engine Rapid Update
+pub const PGN_NMEA_ENGINE_DYNAMIC: u32 = 127489; // 0x01F201 - Engine Parameters, Dynamic
+pub const PGN_NMEA_FLUID_LEVEL: u32 = 127505; // 0x01F211 - Fluid Level
+pub const PGN_NMEA_BATTERY_STATUS: u32 = 127508; // 0x01F214 - Battery Status
+
+// ISOBUS Extended Transport Protocol (ETP - ISO 11783-3)
+pub const PGN_ETP_CM: u32 = 51200; // 0x00C800 - ETP Connection Management
+pub const PGN_ETP_DT: u32 = 50944; // 0x00C700 - ETP Data Transfer
+
 /// Diagnostic Trouble Code (DTC) decoded from J1939 DM1 Active Trouble Codes
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct J1939Dtc {
@@ -40,19 +55,135 @@ pub struct J1939Dtc {
     pub description: String,
 }
 
+/// SAE J1939-81 64-bit NAME field representation
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct J1939Name {
+    pub raw: u64,
+    pub arbitrary_address_capable: bool,
+    pub industry_group: u8,
+    pub industry_group_name: String,
+    pub vehicle_system_instance: u8,
+    pub vehicle_system: u8,
+    pub function: u8,
+    pub function_name: String,
+    pub function_instance: u8,
+    pub ecu_instance: u8,
+    pub manufacturer_code: u16,
+    pub manufacturer_name: Option<String>,
+    pub identity_number: u32,
+}
+
+impl J1939Name {
+    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+        if data.len() < 8 {
+            return None;
+        }
+        let raw = u64::from_le_bytes([
+            data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+        ]);
+        Some(Self::from_u64(raw))
+    }
+
+    pub fn from_u64(raw: u64) -> Self {
+        let identity_number = (raw & 0x1FFFFF) as u32;
+        let manufacturer_code = ((raw >> 21) & 0x7FF) as u16;
+        let ecu_instance = ((raw >> 32) & 0x07) as u8;
+        let function_instance = ((raw >> 35) & 0x1F) as u8;
+        let function = ((raw >> 40) & 0xFF) as u8;
+        let vehicle_system = ((raw >> 49) & 0x7F) as u8;
+        let vehicle_system_instance = ((raw >> 56) & 0x0F) as u8;
+        let industry_group = ((raw >> 60) & 0x07) as u8;
+        let arbitrary_address_capable = ((raw >> 63) & 0x01) != 0;
+
+        let industry_group_name = match industry_group {
+            0 => "Global",
+            1 => "On-Highway Equipment",
+            2 => "Agricultural and Forestry Equipment",
+            3 => "Construction Equipment",
+            4 => "Marine",
+            5 => "Industrial/Stationary",
+            _ => "Reserved",
+        }
+        .to_string();
+
+        let function_name = match function {
+            0 => "Engine",
+            3 => "Transmission",
+            4 => "Brakes/ABS",
+            23 => "Instrument Cluster",
+            25 => "Shift Console",
+            49 => "Cab Controller",
+            52 => "Body Controller",
+            _ => "Vehicle Function",
+        }
+        .to_string();
+
+        let manufacturer_name = match manufacturer_code {
+            11 => Some("Cummins"),
+            12 => Some("Detroit Diesel"),
+            14 => Some("Caterpillar"),
+            16 => Some("Eaton"),
+            18 => Some("John Deere"),
+            19 => Some("Volvo"),
+            22 => Some("Bosch"),
+            43 => Some("Allison Transmission"),
+            160 => Some("Navistar"),
+            185 => Some("PACCAR"),
+            214 => Some("Bendix"),
+            _ => None,
+        }
+        .map(|s| s.to_string());
+
+        Self {
+            raw,
+            arbitrary_address_capable,
+            industry_group,
+            industry_group_name,
+            vehicle_system_instance,
+            vehicle_system,
+            function,
+            function_name,
+            function_instance,
+            ecu_instance,
+            manufacturer_code,
+            manufacturer_name,
+            identity_number,
+        }
+    }
+}
+
 /// High-level decoded J1939 signal payloads
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum J1939Payload {
+    /// PGN 61441 (EBC1)
+    ElectronicBrakeController1 {
+        brake_pedal_position_percent: f32,
+        abs_active: bool,
+        brake_switch_active: bool,
+    },
+    /// PGN 61442 (ETC1)
+    ElectronicTransmissionController1 {
+        driveline_engaged: bool,
+        shift_in_process: bool,
+        output_shaft_speed_rpm: f32,
+    },
+    /// PGN 61443 (EEC2)
+    EngineController2 {
+        accelerator_pedal_position_percent: f32,
+        engine_percent_load_at_current_speed: u8,
+    },
     /// PGN 61444 (EEC1)
     EngineController1 {
         engine_speed_rpm: f32,
         actual_engine_torque_percent: i8,
         drivers_demand_torque_percent: i8,
     },
-    /// PGN 61443 (EEC2)
-    EngineController2 {
-        accelerator_pedal_position_percent: f32,
-        engine_percent_load_at_current_speed: u8,
+    /// PGN 61445 (ETC2)
+    ElectronicTransmissionController2 { selected_gear: i8, current_gear: i8 },
+    /// PGN 65253 (HOURS)
+    EngineHours {
+        total_engine_hours: f32,
+        total_revolutions: u64,
     },
     /// PGN 65262 (ET1)
     EngineTemperature1 {
@@ -65,6 +196,13 @@ pub enum J1939Payload {
         wheel_based_vehicle_speed_kmh: f32,
         parking_brake_switch_active: bool,
     },
+    /// PGN 65266 (LFE)
+    FuelEconomy {
+        fuel_rate_l_per_h: f32,
+        instantaneous_fuel_economy_km_per_l: f32,
+    },
+    /// PGN 60928 (Address Claimed - J1939-81)
+    AddressClaimed { name: J1939Name },
     /// PGN 65260 (VIN - Reassembled Multi-Packet)
     VehicleIdentificationNumber(String),
     /// PGN 65259 (Component ID - Reassembled Multi-Packet)
@@ -89,6 +227,45 @@ pub enum J1939Payload {
     },
     /// PGN 60160 (TP.DT Data Transfer Frame)
     TransportDataTransfer { sequence_number: u8, data: Vec<u8> },
+    /// PGN 127488 (NMEA 2000 Engine Parameters, Rapid Update)
+    NmeaEngineRapid {
+        engine_instance: u8,
+        engine_speed_rpm: f32,
+        boost_pressure_kpa: f32,
+        tilt_trim_percent: i8,
+    },
+    /// PGN 127489 (NMEA 2000 Engine Parameters, Dynamic)
+    NmeaEngineDynamic {
+        engine_instance: u8,
+        oil_pressure_kpa: f32,
+        oil_temp_deg_c: f32,
+        coolant_temp_deg_c: f32,
+        alternator_voltage: f32,
+        fuel_rate_l_per_h: f32,
+        total_hours: f32,
+    },
+    /// PGN 127505 (NMEA 2000 Fluid Level)
+    NmeaFluidLevel {
+        fluid_type: String,
+        instance: u8,
+        level_percent: f32,
+        capacity_liters: Option<f32>,
+    },
+    /// PGN 127508 (NMEA 2000 Battery Status)
+    NmeaBatteryStatus {
+        battery_instance: u8,
+        voltage_volts: f32,
+        current_amps: Option<f32>,
+        temperature_deg_c: Option<f32>,
+    },
+    /// PGN 51200 (ISOBUS ETP.CM Extended Transport Protocol Connection Management)
+    IsobusEtpConnectionManagement {
+        control_byte: u8,
+        total_bytes: u32,
+        target_pgn: u32,
+    },
+    /// PGN 50944 (ISOBUS ETP.DT Extended Transport Protocol Data Transfer)
+    IsobusEtpDataTransfer { sequence_number: u8, data: Vec<u8> },
     /// General or unrecognized PGN
     Generic {
         pgn: u32,
@@ -143,6 +320,27 @@ pub fn dissect_j1939(can_id: u32, data: &[u8]) -> Option<J1939Message> {
 /// Dissect J1939 payload for a specific PGN
 pub fn dissect_j1939_payload(pgn: u32, data: &[u8]) -> J1939Payload {
     match pgn {
+        PGN_EBC1 if data.len() >= 2 => {
+            let brake_switch_active = (data[0] & 0x03) == 0x01;
+            let abs_active = ((data[0] >> 4) & 0x03) == 0x01;
+            let brake_pedal_position_percent = (data[1] as f32) * 0.4;
+            J1939Payload::ElectronicBrakeController1 {
+                brake_pedal_position_percent,
+                abs_active,
+                brake_switch_active,
+            }
+        }
+        PGN_ETC1 if data.len() >= 3 => {
+            let driveline_engaged = (data[0] & 0x03) == 0x01;
+            let shift_in_process = ((data[0] >> 4) & 0x03) == 0x01;
+            let raw_speed = u16::from_le_bytes([data[1], data[2]]);
+            let output_shaft_speed_rpm = (raw_speed as f32) * 0.125;
+            J1939Payload::ElectronicTransmissionController1 {
+                driveline_engaged,
+                shift_in_process,
+                output_shaft_speed_rpm,
+            }
+        }
         PGN_EEC1 if data.len() >= 8 => {
             let actual_engine_torque_percent = (data[2] as i16 - 125) as i8;
             let drivers_demand_torque_percent = (data[1] as i16 - 125) as i8;
@@ -162,6 +360,22 @@ pub fn dissect_j1939_payload(pgn: u32, data: &[u8]) -> J1939Payload {
             J1939Payload::EngineController2 {
                 accelerator_pedal_position_percent,
                 engine_percent_load_at_current_speed,
+            }
+        }
+        PGN_ETC2 if data.len() >= 4 => {
+            let selected_gear = (data[0] as i16 - 125) as i8;
+            let current_gear = (data[3] as i16 - 125) as i8;
+            J1939Payload::ElectronicTransmissionController2 {
+                selected_gear,
+                current_gear,
+            }
+        }
+        PGN_HOURS if data.len() >= 8 => {
+            let raw_hours = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            let raw_revs = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+            J1939Payload::EngineHours {
+                total_engine_hours: (raw_hours as f32) * 0.05,
+                total_revolutions: (raw_revs as u64) * 1000,
             }
         }
         PGN_ET1 if data.len() >= 8 => {
@@ -184,6 +398,25 @@ pub fn dissect_j1939_payload(pgn: u32, data: &[u8]) -> J1939Payload {
             J1939Payload::VehicleSpeed1 {
                 wheel_based_vehicle_speed_kmh,
                 parking_brake_switch_active,
+            }
+        }
+        PGN_FUEL if data.len() >= 4 => {
+            let raw_rate = u16::from_le_bytes([data[0], data[1]]);
+            let raw_econ = u16::from_le_bytes([data[2], data[3]]);
+            J1939Payload::FuelEconomy {
+                fuel_rate_l_per_h: (raw_rate as f32) * 0.05,
+                instantaneous_fuel_economy_km_per_l: (raw_econ as f32) / 512.0,
+            }
+        }
+        PGN_ADDRESS_CLAIMED if data.len() >= 8 => {
+            if let Some(name) = J1939Name::from_bytes(data) {
+                J1939Payload::AddressClaimed { name }
+            } else {
+                J1939Payload::Generic {
+                    pgn,
+                    name: "Address Claimed".to_string(),
+                    data: data.to_vec(),
+                }
             }
         }
         PGN_TP_CM if data.len() >= 8 => {
@@ -258,11 +491,383 @@ pub fn dissect_j1939_payload(pgn: u32, data: &[u8]) -> J1939Payload {
                 dtcs,
             }
         }
+        PGN_NMEA_ENGINE_RAPID if data.len() >= 6 => {
+            let engine_instance = data[0];
+            let raw_rpm = u16::from_le_bytes([data[1], data[2]]);
+            let engine_speed_rpm = if raw_rpm != 0xFFFF {
+                (raw_rpm as f32) * 0.25
+            } else {
+                0.0
+            };
+            let raw_boost = u16::from_le_bytes([data[3], data[4]]);
+            let boost_pressure_kpa = if raw_boost != 0xFFFF {
+                (raw_boost as f32) * 0.1
+            } else {
+                0.0
+            };
+            let tilt_trim_percent = data[5] as i8;
+
+            J1939Payload::NmeaEngineRapid {
+                engine_instance,
+                engine_speed_rpm,
+                boost_pressure_kpa,
+                tilt_trim_percent,
+            }
+        }
+        PGN_NMEA_ENGINE_DYNAMIC if data.len() >= 15 => {
+            let engine_instance = data[0];
+            let raw_oil_press = u16::from_le_bytes([data[1], data[2]]);
+            let oil_pressure_kpa = if raw_oil_press != 0xFFFF {
+                (raw_oil_press as f32) * 0.1
+            } else {
+                0.0
+            };
+            let raw_oil_temp = u16::from_le_bytes([data[3], data[4]]);
+            let oil_temp_deg_c = if raw_oil_temp != 0xFFFF {
+                ((raw_oil_temp as f32) * 0.1) - 273.15
+            } else {
+                0.0
+            };
+            let raw_coolant_temp = u16::from_le_bytes([data[5], data[6]]);
+            let coolant_temp_deg_c = if raw_coolant_temp != 0xFFFF {
+                if raw_coolant_temp > 10000 {
+                    ((raw_coolant_temp as f32) * 0.01) - 273.15
+                } else {
+                    ((raw_coolant_temp as f32) * 0.1) - 273.15
+                }
+            } else {
+                0.0
+            };
+            let raw_alt = u16::from_le_bytes([data[7], data[8]]);
+            let alternator_voltage = if raw_alt != 0xFFFF {
+                (raw_alt as f32) * 0.01
+            } else {
+                0.0
+            };
+            let raw_fuel = u16::from_le_bytes([data[9], data[10]]);
+            let fuel_rate_l_per_h = if raw_fuel != 0xFFFF {
+                (raw_fuel as f32) * 0.1
+            } else {
+                0.0
+            };
+            let raw_hours = u32::from_le_bytes([data[11], data[12], data[13], data[14]]);
+            let total_hours = if raw_hours != 0xFFFFFFFF {
+                (raw_hours as f32) / 3600.0
+            } else {
+                0.0
+            };
+
+            J1939Payload::NmeaEngineDynamic {
+                engine_instance,
+                oil_pressure_kpa,
+                oil_temp_deg_c,
+                coolant_temp_deg_c,
+                alternator_voltage,
+                fuel_rate_l_per_h,
+                total_hours,
+            }
+        }
+        PGN_NMEA_FLUID_LEVEL if data.len() >= 3 => {
+            let fluid_type_id = data[0] & 0x0F;
+            let instance = (data[0] >> 4) & 0x0F;
+            let fluid_type = match fluid_type_id {
+                0 => "Fuel",
+                1 => "Fresh Water",
+                2 => "Waste Water",
+                3 => "Live Well",
+                4 => "Oil",
+                5 => "Black Water",
+                _ => "Other",
+            }
+            .to_string();
+            let raw_level = u16::from_le_bytes([data[1], data[2]]);
+            let level_percent = if raw_level != 0xFFFF {
+                (raw_level as f32) * 0.004
+            } else {
+                0.0
+            };
+            let capacity_liters = if data.len() >= 7 {
+                let raw_cap = u32::from_le_bytes([data[3], data[4], data[5], data[6]]);
+                if raw_cap != 0xFFFFFFFF {
+                    Some((raw_cap as f32) * 0.1)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            J1939Payload::NmeaFluidLevel {
+                fluid_type,
+                instance,
+                level_percent,
+                capacity_liters,
+            }
+        }
+        PGN_NMEA_BATTERY_STATUS if data.len() >= 3 => {
+            let battery_instance = data[0];
+            let raw_v = u16::from_le_bytes([data[1], data[2]]);
+            let voltage_volts = if raw_v != 0xFFFF {
+                (raw_v as f32) * 0.01
+            } else {
+                0.0
+            };
+            let current_amps = if data.len() >= 5 {
+                let raw_i = i16::from_le_bytes([data[3], data[4]]);
+                if raw_i != 0x7FFF {
+                    Some((raw_i as f32) * 0.1)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let temperature_deg_c = if data.len() >= 7 {
+                let raw_t = u16::from_le_bytes([data[5], data[6]]);
+                if raw_t != 0xFFFF {
+                    let kelvin = if raw_t > 10000 {
+                        (raw_t as f32) * 0.01
+                    } else {
+                        (raw_t as f32) * 0.1
+                    };
+                    Some(kelvin - 273.15)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            J1939Payload::NmeaBatteryStatus {
+                battery_instance,
+                voltage_volts,
+                current_amps,
+                temperature_deg_c,
+            }
+        }
+        PGN_ETP_CM if data.len() >= 8 => {
+            let control_byte = data[0];
+            let total_bytes = (data[1] as u32) | ((data[2] as u32) << 8) | ((data[3] as u32) << 16);
+            let target_pgn = (data[5] as u32) | ((data[6] as u32) << 8) | ((data[7] as u32) << 16);
+            J1939Payload::IsobusEtpConnectionManagement {
+                control_byte,
+                total_bytes,
+                target_pgn,
+            }
+        }
+        PGN_ETP_DT if !data.is_empty() => {
+            let sequence_number = data[0];
+            J1939Payload::IsobusEtpDataTransfer {
+                sequence_number,
+                data: data[1..].to_vec(),
+            }
+        }
         _ => J1939Payload::Generic {
             pgn,
             name: pgn_name(pgn).to_string(),
             data: data.to_vec(),
         },
+    }
+}
+
+/// Returns true if the PGN is a standard NMEA 2000 Fast-Packet PGN
+pub fn is_nmea2000_fast_packet_pgn(pgn: u32) -> bool {
+    matches!(
+        pgn,
+        126996 // Product Information
+            | 127489 // Engine Dynamic Parameters
+            | 129029 // GNSS Position Data
+            | 129038 // AIS Class A Position Report
+            | 129039 // AIS Class B Position Report
+            | 129040 // AIS Class B Extended Position Report
+            | 129793 // AIS UTC and Date Report
+            | 129794 // AIS Class A Static and Voyage Related Data
+            | 129798 // AIS SAR Aircraft Position Report
+            | 129809 // AIS Class B "CS" Static Data Report, Part A
+            | 129810 // AIS Class B "CS" Static Data Report, Part B
+            | 130824 // Proprietary Fast-Packet
+    )
+}
+
+/// Active NMEA 2000 Fast-Packet reassembly session
+#[derive(Debug, Clone)]
+struct FastPacketSession {
+    sequence_id: u8,
+    total_bytes: usize,
+    expected_frame: u8,
+    buffer: Vec<u8>,
+    last_timestamp_us: u64,
+}
+
+/// Reassembler for NMEA 2000 / IEC 61162-3 Fast-Packet protocol
+#[derive(Debug, Clone, Default)]
+pub struct FastPacketReassembler {
+    sessions: HashMap<(u8, u32), FastPacketSession>, // Key: (source_address, pgn)
+}
+
+impl FastPacketReassembler {
+    pub fn new() -> Self {
+        Self {
+            sessions: HashMap::new(),
+        }
+    }
+
+    /// Ingest a candidate fast-packet frame.
+    /// If complete, returns the reassembled payload (raw bytes).
+    pub fn ingest_frame(
+        &mut self,
+        source_address: u8,
+        pgn: u32,
+        data: &[u8],
+        timestamp_us: u64,
+    ) -> Option<Vec<u8>> {
+        if data.is_empty() {
+            return None;
+        }
+
+        let sequence_id = (data[0] >> 5) & 0x07;
+        let frame_counter = data[0] & 0x1F;
+
+        if frame_counter == 0 {
+            // First frame: data[1] is total byte length (up to 223)
+            if data.len() < 2 {
+                return None;
+            }
+            let total_bytes = data[1] as usize;
+            if total_bytes == 0 || total_bytes > 223 {
+                return None;
+            }
+            let mut buffer = Vec::with_capacity(total_bytes);
+            let payload_in_frame0 = data.len().saturating_sub(2).min(total_bytes);
+            buffer.extend_from_slice(&data[2..2 + payload_in_frame0]);
+
+            if buffer.len() >= total_bytes {
+                self.sessions.remove(&(source_address, pgn));
+                return Some(buffer);
+            }
+
+            self.sessions.insert(
+                (source_address, pgn),
+                FastPacketSession {
+                    sequence_id,
+                    total_bytes,
+                    expected_frame: 1,
+                    buffer,
+                    last_timestamp_us: timestamp_us,
+                },
+            );
+            None
+        } else {
+            let session = self.sessions.get_mut(&(source_address, pgn))?;
+
+            // Sequence validation
+            if session.sequence_id != sequence_id || session.expected_frame != frame_counter {
+                self.sessions.remove(&(source_address, pgn));
+                return None;
+            }
+
+            session.expected_frame += 1;
+            session.last_timestamp_us = timestamp_us;
+
+            let remaining = session.total_bytes.saturating_sub(session.buffer.len());
+            let chunk_len = data.len().saturating_sub(1).min(remaining);
+            session.buffer.extend_from_slice(&data[1..1 + chunk_len]);
+
+            if session.buffer.len() >= session.total_bytes {
+                let completed = self.sessions.remove(&(source_address, pgn))?;
+                Some(completed.buffer)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Active ISOBUS Extended Transport Protocol (ISO 11783-3) reassembly session
+#[derive(Debug, Clone)]
+struct EtpSession {
+    target_pgn: u32,
+    total_bytes: usize,
+    expected_seq: u8,
+    buffer: Vec<u8>,
+    last_timestamp_us: u64,
+}
+
+/// Reassembler for ISOBUS Extended Transport Protocol (ISO 11783-3)
+#[derive(Debug, Clone, Default)]
+pub struct IsobusEtpReassembler {
+    sessions: HashMap<u8, EtpSession>, // Key: source_address
+}
+
+impl IsobusEtpReassembler {
+    pub fn new() -> Self {
+        Self {
+            sessions: HashMap::new(),
+        }
+    }
+
+    pub fn ingest_frame(
+        &mut self,
+        source_address: u8,
+        pgn: u32,
+        data: &[u8],
+        timestamp_us: u64,
+    ) -> Option<(u32, Vec<u8>)> {
+        match pgn {
+            PGN_ETP_CM if data.len() >= 8 => {
+                let control_byte = data[0];
+                if control_byte == 0x14 {
+                    // RTS (Request To Send)
+                    let total_bytes = ((data[1] as u32)
+                        | ((data[2] as u32) << 8)
+                        | ((data[3] as u32) << 16)) as usize;
+                    let target_pgn =
+                        (data[5] as u32) | ((data[6] as u32) << 8) | ((data[7] as u32) << 16);
+
+                    let capped_bytes = total_bytes.min(16 * 1024 * 1024);
+                    self.sessions.insert(
+                        source_address,
+                        EtpSession {
+                            target_pgn,
+                            total_bytes: capped_bytes,
+                            expected_seq: 1,
+                            buffer: Vec::with_capacity(capped_bytes.min(1024 * 1024)),
+                            last_timestamp_us: timestamp_us,
+                        },
+                    );
+                } else if control_byte == 0xFF {
+                    // Connection Abort
+                    self.sessions.remove(&source_address);
+                }
+                None
+            }
+            PGN_ETP_DT if data.len() >= 2 => {
+                let seq = data[0];
+                let session = self.sessions.get_mut(&source_address)?;
+
+                if seq != session.expected_seq {
+                    self.sessions.remove(&source_address);
+                    return None;
+                }
+
+                session.expected_seq = if seq == 255 { 1 } else { seq + 1 };
+                session.last_timestamp_us = timestamp_us;
+
+                let remaining = session.total_bytes.saturating_sub(session.buffer.len());
+                let bytes_in_packet = (data.len() - 1).min(remaining);
+                session
+                    .buffer
+                    .extend_from_slice(&data[1..1 + bytes_in_packet]);
+
+                if session.buffer.len() >= session.total_bytes {
+                    let completed = self.sessions.remove(&source_address)?;
+                    Some((completed.target_pgn, completed.buffer))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 }
 
@@ -276,20 +881,24 @@ struct TransportSession {
     last_timestamp_us: u64,
 }
 
-/// Reassembler for J1939 Broadcast Announce Message (BAM) and Connection Mode Data Transfer (CMDT)
+/// Unified reassembler for J1939 BAM/CMDT, NMEA 2000 Fast-Packet, and ISOBUS ETP
 #[derive(Debug, Clone, Default)]
 pub struct J1939TransportReassembler {
     sessions: HashMap<u8, TransportSession>, // keyed by Source Address
+    pub fast_packet: FastPacketReassembler,
+    pub etp: IsobusEtpReassembler,
 }
 
 impl J1939TransportReassembler {
     pub fn new() -> Self {
         Self {
             sessions: HashMap::new(),
+            fast_packet: FastPacketReassembler::new(),
+            etp: IsobusEtpReassembler::new(),
         }
     }
 
-    /// Ingest a J1939 frame. If a multi-packet message is completed, returns the reassembled J1939Message.
+    /// Ingest a J1939/NMEA 2000/ISOBUS frame. If a multi-packet message is completed, returns the reassembled J1939Message.
     pub fn ingest_frame(
         &mut self,
         can_id: u32,
@@ -298,22 +907,51 @@ impl J1939TransportReassembler {
     ) -> Option<J1939Message> {
         let header = parse_j1939_header(can_id);
 
+        // Check ISOBUS ETP
+        if header.pgn == PGN_ETP_CM || header.pgn == PGN_ETP_DT {
+            if let Some((target_pgn, buffer)) =
+                self.etp
+                    .ingest_frame(header.source_address, header.pgn, data, timestamp_us)
+            {
+                let mut reassembled_header = header;
+                reassembled_header.pgn = target_pgn;
+                let payload = dissect_j1939_payload(target_pgn, &buffer);
+                return Some(J1939Message {
+                    header: reassembled_header,
+                    payload,
+                });
+            }
+            return None;
+        }
+
+        // Check NMEA 2000 Fast-Packet
+        if is_nmea2000_fast_packet_pgn(header.pgn) {
+            if let Some(buffer) =
+                self.fast_packet
+                    .ingest_frame(header.source_address, header.pgn, data, timestamp_us)
+            {
+                let payload = dissect_j1939_payload(header.pgn, &buffer);
+                return Some(J1939Message { header, payload });
+            }
+            return None;
+        }
+
         match header.pgn {
             PGN_TP_CM if data.len() >= 8 => {
                 let control_byte = data[0];
-                // 0x10 = BAM, 0x11 = RTS
-                if control_byte == 0x10 || control_byte == 0x11 {
-                    let total_bytes = u16::from_le_bytes([data[1], data[2]]) as usize;
-                    let target_pgn =
-                        (data[5] as u32) | ((data[6] as u32) << 8) | ((data[7] as u32) << 16);
+                let total_bytes = u16::from_le_bytes([data[1], data[2]]) as usize;
+                let target_pgn =
+                    (data[5] as u32) | ((data[6] as u32) << 8) | ((data[7] as u32) << 16);
 
+                // 0x20: BAM (Broadcast Announce Message), 0x10: RTS (Connection Mode)
+                if control_byte == 0x20 || control_byte == 0x10 {
                     self.sessions.insert(
                         header.source_address,
                         TransportSession {
                             target_pgn,
                             total_bytes,
                             expected_seq: 1,
-                            buffer: Vec::with_capacity(total_bytes),
+                            buffer: Vec::with_capacity(total_bytes.min(65535)),
                             last_timestamp_us: timestamp_us,
                         },
                     );
@@ -365,10 +1003,15 @@ impl J1939TransportReassembler {
 
 pub fn pgn_name(pgn: u32) -> &'static str {
     match pgn {
-        PGN_EEC1 => "Electronic Engine Controller 1 (EEC1)",
+        PGN_EBC1 => "Electronic Brake Controller 1 (EBC1)",
+        PGN_ETC1 => "Electronic Transmission Controller 1 (ETC1)",
         PGN_EEC2 => "Electronic Engine Controller 2 (EEC2)",
+        PGN_EEC1 => "Electronic Engine Controller 1 (EEC1)",
+        PGN_ETC2 => "Electronic Transmission Controller 2 (ETC2)",
+        PGN_HOURS => "Engine Hours & Revolutions",
         PGN_ET1 => "Engine Temperature 1 (ET1)",
         PGN_CCVS1 => "Cruise Control/Vehicle Speed (CCVS1)",
+        PGN_FUEL => "Fuel Economy (LFE)",
         PGN_ADDRESS_CLAIMED => "Address Claimed",
         PGN_TP_CM => "Transport Protocol Connection Management (TP.CM)",
         PGN_TP_DT => "Transport Protocol Data Transfer (TP.DT)",
@@ -376,6 +1019,12 @@ pub fn pgn_name(pgn: u32) -> &'static str {
         PGN_VIN => "Vehicle Identification Number (VIN)",
         PGN_COMPONENT_ID => "Component Identification",
         PGN_SOFTWARE_ID => "Software Identification",
+        PGN_NMEA_ENGINE_RAPID => "NMEA 2000 Engine Rapid Update",
+        PGN_NMEA_ENGINE_DYNAMIC => "NMEA 2000 Engine Dynamic Parameters",
+        PGN_NMEA_FLUID_LEVEL => "NMEA 2000 Fluid Level",
+        PGN_NMEA_BATTERY_STATUS => "NMEA 2000 Battery Status",
+        PGN_ETP_CM => "ISOBUS ETP Connection Management (ETP.CM)",
+        PGN_ETP_DT => "ISOBUS ETP Data Transfer (ETP.DT)",
         _ => "Proprietary or Unregistered PGN",
     }
 }
@@ -387,20 +1036,32 @@ mod tests {
 
     #[test]
     fn test_j1939_header_pdu1_destination_specific() {
-        let id = 0x18EF0501;
-        let hdr = parse_j1939_header(id);
-        assert_eq!(hdr.priority, 6);
-        assert_eq!(hdr.source_address, 0x01);
-        assert!(hdr.is_pdu1);
-        assert_eq!(hdr.destination_address, Some(0x05));
-        assert_eq!(hdr.pgn, 0xEF00);
+        // Priority 3, Data Page 0, PF 239 (0xEF), Destination 0x28, Source 0xF1
+        let can_id = 0x0CEF28F1;
+        let header = parse_j1939_header(can_id);
+
+        assert_eq!(header.priority, 3);
+        assert_eq!(header.pdu_format, 239);
+        assert_eq!(header.pdu_specific, 0x28);
+        assert_eq!(header.destination_address, Some(0x28));
+        assert_eq!(header.source_address, 0xF1);
+        assert_eq!(header.pgn, 0x00EF00);
+        assert!(header.is_pdu1);
     }
 
     #[test]
     fn test_j1939_eec1_dissection() {
-        let id = 0x0CF00400;
-        let data = [0xFF, 0x7D, 0x7D, 0x00, 0x20, 0xFF, 0xFF, 0xFF];
-        let msg = dissect_j1939(id, &data).expect("Dissected EEC1");
+        // EEC1: PGN 61444 (0x00F004) -> ID = 0x0CF00400 (Source = 0x00 Engine)
+        let can_id = 0x0CF00400;
+        let data = [
+            0xF0, // Torque Mode / State
+            0x7D, // Driver's demand torque: 125 - 125 = 0%
+            0x87, // Actual torque: 135 - 125 = +10%
+            0x00, 0x20, // RPM: 0x2000 = 8192 * 0.125 = 1024 rpm
+            0x00, 0x00, 0x00,
+        ];
+
+        let msg = dissect_j1939(can_id, &data).expect("Dissected EEC1");
         assert_eq!(msg.header.pgn, PGN_EEC1);
         match msg.payload {
             J1939Payload::EngineController1 {
@@ -408,41 +1069,95 @@ mod tests {
                 actual_engine_torque_percent,
                 drivers_demand_torque_percent,
             } => {
-                assert_eq!(actual_engine_torque_percent, 0);
-                assert_eq!(drivers_demand_torque_percent, 0);
                 assert_eq!(engine_speed_rpm, 1024.0);
+                assert_eq!(actual_engine_torque_percent, 10);
+                assert_eq!(drivers_demand_torque_percent, 0);
             }
             _ => panic!("Expected EngineController1"),
         }
     }
 
     #[test]
+    fn test_j1939_name_and_address_claimed() {
+        // PGN 60928 (0x00EE00) - Address Claimed: ID = 0x18EEFF00
+        let can_id = 0x18EEFF00;
+        // Construct NAME:
+        // Identity: 12345 (0x3039)
+        // Manufacturer: 11 (Cummins -> 0x0B)
+        // ECU Instance: 0, Function Instance: 0
+        // Function: 0 (Engine)
+        // Vehicle System: 0
+        // Industry Group: 1 (On-Highway)
+        // Arbitrary Address Capable: 1
+        let mut name_u64 = 12345u64;
+        name_u64 |= (11u64) << 21;
+        name_u64 |= (0u64) << 40; // Engine
+        name_u64 |= (1u64) << 60; // On-Highway
+        name_u64 |= (1u64) << 63; // Arbitrary Address Capable
+
+        let name_bytes = name_u64.to_le_bytes();
+        let msg = dissect_j1939(can_id, &name_bytes).expect("Dissected Address Claimed");
+        match msg.payload {
+            J1939Payload::AddressClaimed { name } => {
+                assert_eq!(name.identity_number, 12345);
+                assert_eq!(name.manufacturer_code, 11);
+                assert_eq!(name.manufacturer_name, Some("Cummins".to_string()));
+                assert_eq!(name.function, 0);
+                assert_eq!(name.function_name, "Engine");
+                assert_eq!(name.industry_group, 1);
+                assert_eq!(name.industry_group_name, "On-Highway Equipment");
+                assert!(name.arbitrary_address_capable);
+            }
+            _ => panic!("Expected AddressClaimed"),
+        }
+    }
+
+    #[test]
+    fn test_j1939_heavy_duty_pgns() {
+        // EBC1 (61441 = 0xF001): Brake pedal 50% (50 / 0.4 = 125 = 0x7D), ABS active (bit 4 = 1 -> 0x10)
+        let ebc1 = dissect_j1939(0x18F0010B, &[0x10, 0x7D]).unwrap();
+        match ebc1.payload {
+            J1939Payload::ElectronicBrakeController1 {
+                brake_pedal_position_percent,
+                abs_active,
+                ..
+            } => {
+                assert_eq!(brake_pedal_position_percent, 50.0);
+                assert!(abs_active);
+            }
+            _ => panic!("Expected ElectronicBrakeController1"),
+        }
+
+        // HOURS (65253 = 0xFEE5): 1000 hours (1000 / 0.05 = 20000 = 0x4E20)
+        let hours_data = [0x20, 0x4E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let hours_msg = dissect_j1939(0x18FEE500, &hours_data).unwrap();
+        match hours_msg.payload {
+            J1939Payload::EngineHours {
+                total_engine_hours, ..
+            } => {
+                assert_eq!(total_engine_hours, 1000.0);
+            }
+            _ => panic!("Expected EngineHours"),
+        }
+    }
+
+    #[test]
     fn test_j1939_bam_vin_reassembly() {
         let mut reassembler = J1939TransportReassembler::new();
-
-        // 1. TP.CM BAM for VIN (PGN 65260 = 0x00FEEC), 17 bytes, 3 packets
-        // ID: 0x18ECFF00 (Priority 6, PGN 60416, DA=0xFF Global, SA=0x00)
         let tp_cm_id = 0x18ECFF00;
-        let cm_data = [
-            0x10, // BAM
-            17, 0x00, // Total bytes = 17
-            3,    // Total packets = 3
-            0xFF, // Reserved
-            0xEC, 0xFE, 0x00, // Target PGN 65260 (VIN)
-        ];
+
+        // TP.CM BAM for VIN (PGN 65260 = 0x00FEEC), 17 bytes, 3 packets
+        let cm_data = [0x20, 17, 0x00, 3, 0xFF, 0xEC, 0xFE, 0x00];
         assert_eq!(reassembler.ingest_frame(tp_cm_id, &cm_data, 1000), None);
 
-        // 2. TP.DT Packet 1 (7 bytes: "1HGCR2F")
         let tp_dt_id = 0x18EBFF00;
-        let dt1 = [1, b'1', b'H', b'G', b'C', b'R', b'2', b'F'];
+        let dt1 = [1, b'1', b'H', b'G', b'C', b'R', b'2', b'F', b'8'];
         assert_eq!(reassembler.ingest_frame(tp_dt_id, &dt1, 2000), None);
 
-        // 3. TP.DT Packet 2 (7 bytes: "83HA000")
-        let dt2 = [2, b'8', b'3', b'H', b'A', b'0', b'0', b'0'];
+        let dt2 = [2, b'3', b'H', b'A', b'0', b'0', b'0', b'1', b'2'];
         assert_eq!(reassembler.ingest_frame(tp_dt_id, &dt2, 3000), None);
 
-        // 4. TP.DT Packet 3 (3 remaining bytes: "123*")
-        let dt3 = [3, b'1', b'2', b'3', 0xFF, 0xFF, 0xFF, 0xFF];
+        let dt3 = [3, b'3', 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
         let res = reassembler
             .ingest_frame(tp_dt_id, &dt3, 4000)
             .expect("Reassembly complete");
@@ -463,8 +1178,6 @@ mod tests {
         let cm_data = [0x10, 6, 0x00, 1, 0xFF, 0xCA, 0xFE, 0x00];
         assert_eq!(reassembler.ingest_frame(tp_cm_id, &cm_data, 1000), None);
 
-        // TP.DT Packet 1: Lamp status (2 bytes) + 1 DTC (4 bytes: SPN 100 = Engine Oil Pressure, FMI 1)
-        // SPN 100 = 0x000064 -> byte 0 = 0x64, byte 1 = 0x00, byte 2: FMI 1 | SPN hi 0 => 0x01, occ = 5
         let dt_data = [1, 0x00, 0x00, 0x64, 0x00, 0x01, 0x05, 0xFF];
         let tp_dt_id = 0x18EBFF00;
         let res = reassembler
@@ -481,6 +1194,142 @@ mod tests {
             }
             _ => panic!("Expected DM1 ActiveDiagnosticTroubleCodes"),
         }
+    }
+
+    #[test]
+    fn test_nmea2000_engine_rapid_and_fluid_and_battery() {
+        // PGN 127488 (0x01F200): Engine Rapid Update (Instance 0, 1800 RPM [raw = 7200 = 0x1C20], Boost 150 kPa [raw = 1500 = 0x05DC], Trim +25%)
+        let can_id_rapid = 0x0DF20000;
+        let rapid_data = [0x00, 0x20, 0x1C, 0xDC, 0x05, 25, 0xFF, 0xFF];
+        let rapid_msg = dissect_j1939(can_id_rapid, &rapid_data).unwrap();
+        match rapid_msg.payload {
+            J1939Payload::NmeaEngineRapid {
+                engine_instance,
+                engine_speed_rpm,
+                boost_pressure_kpa,
+                tilt_trim_percent,
+            } => {
+                assert_eq!(engine_instance, 0);
+                assert_eq!(engine_speed_rpm, 1800.0);
+                assert!((boost_pressure_kpa - 150.0).abs() < 0.01);
+                assert_eq!(tilt_trim_percent, 25);
+            }
+            _ => panic!("Expected NmeaEngineRapid"),
+        }
+
+        // PGN 127505 (0x01F211): Fluid Level (Fuel=0, Instance 1 -> byte 0 = 0x10, Level 75% -> raw = 75 / 0.004 = 18750 = 0x493E, Cap 400.0 L -> raw = 4000 = 0x0FA0)
+        let can_id_fluid = 0x19F21101;
+        let fluid_data = [0x10, 0x3E, 0x49, 0xA0, 0x0F, 0x00, 0x00, 0xFF];
+        let fluid_msg = dissect_j1939(can_id_fluid, &fluid_data).unwrap();
+        match fluid_msg.payload {
+            J1939Payload::NmeaFluidLevel {
+                fluid_type,
+                instance,
+                level_percent,
+                capacity_liters,
+            } => {
+                assert_eq!(fluid_type, "Fuel");
+                assert_eq!(instance, 1);
+                assert!((level_percent - 75.0).abs() < 0.01);
+                assert_eq!(capacity_liters, Some(400.0));
+            }
+            _ => panic!("Expected NmeaFluidLevel"),
+        }
+
+        // PGN 127508 (0x01F214): Battery Status (Instance 0, 13.60V -> raw 1360 = 0x0550, +45.0A -> raw 450 = 0x01C2, 25.0 C -> 298.15 K -> raw 29815 = 0x7477)
+        let can_id_batt = 0x19F21400;
+        let batt_data = [0x00, 0x50, 0x05, 0xC2, 0x01, 0x77, 0x74, 0xFF];
+        let batt_msg = dissect_j1939(can_id_batt, &batt_data).unwrap();
+        match batt_msg.payload {
+            J1939Payload::NmeaBatteryStatus {
+                battery_instance,
+                voltage_volts,
+                current_amps,
+                temperature_deg_c,
+            } => {
+                assert_eq!(battery_instance, 0);
+                assert!((voltage_volts - 13.6).abs() < 0.01);
+                assert_eq!(current_amps, Some(45.0));
+                assert!((temperature_deg_c.unwrap() - 25.0).abs() < 0.1);
+            }
+            _ => panic!("Expected NmeaBatteryStatus"),
+        }
+    }
+
+    #[test]
+    fn test_nmea2000_fast_packet_reassembly() {
+        let mut reassembler = J1939TransportReassembler::new();
+        let n2k_id = 0x19F20100; // PGN 127489 (Engine Dynamic Parameters)
+
+        // Frame 0: Seq 2 (0x40), Frame 0 (0x00) -> 0x40. Total size: 26 bytes.
+        // Followed by 6 payload bytes:
+        // [Instance=0, OilPress 450 kPa (raw 4500=0x1194), OilTemp 90 C (363.15 K -> raw 3631=0x0E2F), CoolantTemp byte 0=0x38]
+        let f0 = [0x40, 26, 0x00, 0x94, 0x11, 0x2F, 0x0E, 0x38];
+        assert_eq!(reassembler.ingest_frame(n2k_id, &f0, 1000), None);
+
+        // Frame 1: Seq 2, Frame 1 -> 0x41. 7 payload bytes:
+        // [CoolantTemp byte 1=0x74 (raw 29752 -> 24.37 C), Alt 14.2V (raw 1420=0x058C), FuelRate 35.0 L/h (raw 350=0x015E), Hours byte 0..=1: 0x40, 0x1F]
+        let f1 = [0x41, 0x74, 0x8C, 0x05, 0x5E, 0x01, 0x40, 0x1F];
+        assert_eq!(reassembler.ingest_frame(n2k_id, &f1, 2000), None);
+
+        // Frame 2: Seq 2, Frame 2 -> 0x42. 7 payload bytes:
+        // [Hours bytes 2..=3: 0x00, 0x00 (total hours = 8000s / 3600 = 2.22h), remaining 5 bytes]
+        let f2 = [0x42, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+        assert_eq!(reassembler.ingest_frame(n2k_id, &f2, 3000), None);
+
+        // Frame 3: Seq 2, Frame 3 -> 0x43. Last 6 bytes:
+        let f3 = [0x43, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+        let res = reassembler
+            .ingest_frame(n2k_id, &f3, 4000)
+            .expect("Fast packet complete");
+
+        assert_eq!(res.header.pgn, PGN_NMEA_ENGINE_DYNAMIC);
+        match res.payload {
+            J1939Payload::NmeaEngineDynamic {
+                engine_instance,
+                oil_pressure_kpa,
+                alternator_voltage,
+                fuel_rate_l_per_h,
+                ..
+            } => {
+                assert_eq!(engine_instance, 0);
+                assert!((oil_pressure_kpa - 450.0).abs() < 0.1);
+                assert!((alternator_voltage - 14.2).abs() < 0.01);
+                assert!((fuel_rate_l_per_h - 35.0).abs() < 0.1);
+            }
+            _ => panic!("Expected NmeaEngineDynamic"),
+        }
+    }
+
+    #[test]
+    fn test_isobus_etp_reassembly() {
+        let mut reassembler = J1939TransportReassembler::new();
+        let etp_cm_id = 0x18C8FF80; // Source address 0x80
+
+        // ETP.CM RTS (0x14), Total bytes = 20 (0x000014), Target PGN = 65260 (0x00FEEC - VIN)
+        let rts = [0x14, 20, 0x00, 0x00, 0xFF, 0xEC, 0xFE, 0x00];
+        assert_eq!(reassembler.ingest_frame(etp_cm_id, &rts, 1000), None);
+
+        let etp_dt_id = 0x18C7FF80;
+        // Packet 1: 7 bytes
+        let dt1 = [1, b'A', b'G', b'C', b'O', b'1', b'2', b'3'];
+        assert_eq!(reassembler.ingest_frame(etp_dt_id, &dt1, 2000), None);
+
+        // Packet 2: 7 bytes
+        let dt2 = [2, b'4', b'5', b'6', b'7', b'8', b'9', b'0'];
+        assert_eq!(reassembler.ingest_frame(etp_dt_id, &dt2, 3000), None);
+
+        // Packet 3: 6 bytes to reach 20 total bytes
+        let dt3 = [3, b'1', b'2', b'3', b'4', b'5', b'6', 0xFF];
+        let res = reassembler
+            .ingest_frame(etp_dt_id, &dt3, 4000)
+            .expect("ETP complete");
+
+        assert_eq!(res.header.pgn, PGN_VIN);
+        assert_eq!(
+            res.payload,
+            J1939Payload::VehicleIdentificationNumber("AGCO1234567890123456".to_string())
+        );
     }
 
     proptest::proptest! {

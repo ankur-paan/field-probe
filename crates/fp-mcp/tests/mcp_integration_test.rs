@@ -94,7 +94,7 @@ async fn test_mcp_client_full_field_session_over_stdio() {
         .expect("List response");
     let list_resp: serde_json::Value = serde_json::from_str(&list_resp_str).unwrap();
     let tools = list_resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 9);
+    assert_eq!(tools.len(), 10);
 
     // STEP C: Call auto_detect_bus
     let detect_req = json!({

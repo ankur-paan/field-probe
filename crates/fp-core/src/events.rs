@@ -133,6 +133,12 @@ pub struct CanFrame {
     pub dlc: u8,
     pub data: Bytes,
     pub is_fd: bool,
+    /// Bit Rate Switch (CAN-FD data phase transmitted at higher data bitrate)
+    #[serde(default)]
+    pub brs: bool,
+    /// Error State Indicator (Transmitting node is in Error-Passive state)
+    #[serde(default)]
+    pub esi: bool,
     pub is_rtr: bool,
     pub is_error: bool,
 }
@@ -144,6 +150,8 @@ impl CanFrame {
             dlc: data.len() as u8,
             data: Bytes::copy_from_slice(data),
             is_fd: false,
+            brs: false,
+            esi: false,
             is_rtr: false,
             is_error: false,
         }
@@ -155,6 +163,8 @@ impl CanFrame {
             dlc: data.len() as u8,
             data: Bytes::copy_from_slice(data),
             is_fd: false,
+            brs: false,
+            esi: false,
             is_rtr: false,
             is_error: false,
         }
@@ -166,6 +176,8 @@ impl CanFrame {
             dlc,
             data: Bytes::new(),
             is_fd: false,
+            brs: false,
+            esi: false,
             is_rtr: true,
             is_error: false,
         }
@@ -177,6 +189,8 @@ impl CanFrame {
             dlc,
             data: Bytes::new(),
             is_fd: false,
+            brs: false,
+            esi: false,
             is_rtr: true,
             is_error: false,
         }
@@ -188,6 +202,8 @@ impl CanFrame {
             dlc: data.len() as u8,
             data: Bytes::copy_from_slice(data),
             is_fd: true,
+            brs: false,
+            esi: false,
             is_rtr: false,
             is_error: false,
         }
@@ -199,9 +215,17 @@ impl CanFrame {
             dlc: data.len() as u8,
             data: Bytes::copy_from_slice(data),
             is_fd: true,
+            brs: false,
+            esi: false,
             is_rtr: false,
             is_error: false,
         }
+    }
+
+    pub fn with_brs_esi(mut self, brs: bool, esi: bool) -> Self {
+        self.brs = brs;
+        self.esi = esi;
+        self
     }
 }
 

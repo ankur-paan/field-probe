@@ -1,5 +1,6 @@
 pub mod bus_load;
 pub mod catalog;
+pub mod dbc;
 pub mod decoder;
 pub mod diff_capture;
 pub mod engine;
@@ -12,6 +13,7 @@ pub mod sniffer;
 
 pub use bus_load::{calculate_frame_bit_length, BusLoadEstimator, BusLoadReport};
 pub use catalog::{InferredRegisterEntry, RegisterCatalog};
+pub use dbc::{DbcDatabase, DbcMessage};
 pub use decoder::{
     decode_ascii_string, decode_fixed_point_i16, decode_fixed_point_u16, decode_float32,
     decode_float64, decode_int32, decode_mod10000, decode_register_representations, decode_uint32,
