@@ -14,7 +14,8 @@ pub use dnp3::{dissect_dnp3, dnp3_crc16, verify_dnp3_crc, Dnp3Frame, Dnp3Functio
 pub use isotp::{IsoTpError, IsoTpFrameType, IsoTpReassembler};
 pub use j1939::{
     dissect_j1939, dissect_j1939_payload, parse_j1939_header, J1939Dtc, J1939Header, J1939Message,
-    J1939Payload, J1939TransportReassembler,
+    J1939Payload, J1939TransportReassembler, PGN_ADDRESS_CLAIMED, PGN_CCVS1, PGN_COMPONENT_ID,
+    PGN_DM1, PGN_EEC1, PGN_EEC2, PGN_ET1, PGN_SOFTWARE_ID, PGN_TP_CM, PGN_TP_DT, PGN_VIN,
 };
 pub use modbus::{
     parse_modbus_rtu_frame, parse_modbus_tcp_frame, DiagnosticSubFunction, ModbusExceptionCode,

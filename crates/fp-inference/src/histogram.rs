@@ -214,6 +214,16 @@ impl TimingHistogramEngine {
             .filter(|s| s.is_periodic)
             .collect()
     }
+
+    /// Retrieve estimated frequency in Hz and jitter in milliseconds for a CAN ID
+    pub fn get_node_timing(&self, can_id: CanId) -> (f32, f32) {
+        if let Some(tracker) = self.trackers.get(&can_id) {
+            if let Some(stats) = tracker.stats() {
+                return (stats.estimated_freq_hz as f32, stats.std_dev_ms as f32);
+            }
+        }
+        (1.0, 0.0)
+    }
 }
 
 #[cfg(test)]
