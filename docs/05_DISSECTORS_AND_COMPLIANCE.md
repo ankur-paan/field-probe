@@ -119,23 +119,62 @@ DNP3 is widely deployed across electric utility, water, and oil/gas SCADA networ
 
 ---
 
-## 8. SAE J1939 Transport Protocol (BAM & CMDT)
+## 8. SAE J1939 Fleet Protocols & J1939-81 Address Claiming
 
-Heavy-duty commercial vehicles and machinery transmit parameters exceeding 8 bytes via J1939 Transport Protocol:
+Heavy-duty commercial vehicles and machinery transmit parameters via SAE J1939:
 
-- **Broadcast Announce Message (BAM):**
-  - Advertised on Connection Management PGN 60416 (`0x00EC00`) with Global Destination `0xFF`.
-  - Ingests Data Transfer packets on PGN 60160 (`0x00EB00`) with monotonic sequence numbers.
-- **Connection Mode Data Transfer (CMDT):**
-  - Point-to-point transfer negotiated via RTS/CTS handshakes.
-- **Decoded Parameter Groups:**
+- **J1939-81 Address Claiming (PGN 60928 / `0x00EE00`):**
+  - Dissects the 64-bit `NAME` field into standard sub-fields:
+    - `Identity Number` (21 bits): Unique ECU serial code.
+    - `Manufacturer Code` (11 bits): Industry manufacturer lookup (e.g., Cummins, Caterpillar, Detroit Diesel, Bosch, Eaton, PACCAR).
+    - `ECU Instance` (3 bits) & `Function Instance` (5 bits).
+    - `Function` (8 bits): Standard functional role (e.g., Engine, Transmission, Brakes/ABS, Instrument Cluster, Cab Controller).
+    - `Vehicle System` (7 bits) & `Vehicle System Instance` (4 bits).
+    - `Industry Group` (3 bits): Global, On-Highway, Agricultural/Forestry, Construction, Marine, Industrial.
+    - `Arbitrary Address Capable` (1 bit): Address contention resolution indicator.
+- **Powertrain & Fleet PGNs:**
+  - `PGN 61441 (EBC1)`: Electronic Brake Controller 1 — Brake pedal position, ABS active status, EBS brake switch.
+  - `PGN 61442 (ETC1)`: Electronic Transmission Controller 1 — Driveline engaged, shift in process, output shaft RPM.
+  - `PGN 61445 (ETC2)`: Electronic Transmission Controller 2 — Current gear and selected gear.
+  - `PGN 65253 (HOURS)`: Engine Hours and Revolutions.
+  - `PGN 65266 (LFE)`: Fuel Economy — Fuel rate (L/h) and instantaneous economy (km/L).
+- **Transport Protocol (BAM & CMDT):**
+  - **Broadcast Announce Message (BAM):** Advertised on Connection Management PGN 60416 (`0x00EC00`) with Global Destination `0xFF`. Ingests Data Transfer packets on PGN 60160 (`0x00EB00`).
   - **VIN (PGN 65260 / `0x00FEEC`):** Reassembles 17-character ASCII Vehicle Identification Number.
-  - **Component Identification (PGN 65259 / `0x00FEEB`):** Extracts Make, Model, Serial Number, and Unit ID delimiters (`*`).
+  - **Component Identification (PGN 65259 / `0x00FEEB`):** Extracts Make, Model, Serial Number, and Unit ID.
   - **DM1 Active Trouble Codes (PGN 65226 / `0x00FECA`):** Decodes Protect Lamp, Amber Warning Lamp, Red Stop Lamp, Suspect Parameter Number (SPN), Failure Mode Identifier (FMI), and occurrence counts.
 
 ---
 
-## 9. Modbus Device Identification (FC 0x2B / 0x0E)
+## 9. ASAM MCD-1 XCP & CCP Calibration Dissector
+
+The calibration engine decodes Master/Slave memory calibration and data acquisition sessions:
+
+- **Universal Measurement and Calibration Protocol (XCP on CAN & CAN-FD):**
+  - Dissects Command Transfer Objects (CTO): `CONNECT` (`0xFF`), `DISCONNECT` (`0xFE`), `GET_STATUS` (`0xFD`), `SYNCH` (`0xFC`), `GET_SEED` (`0xF8`), `UNLOCK` (`0xF7`), `SET_MTA` (`0xF6`), `UPLOAD` (`0xF5`), `SHORT_UPLOAD` (`0xF4`), `DOWNLOAD` (`0xF0`), `SHORT_DOWNLOAD` (`0xED`), `MODIFY_BITS` (`0xEC`), `SET_CAL_PAGE` (`0xEB`), and `GET_CAL_PAGE` (`0xEA`).
+  - Dissects Response Packets: Positive Response (`0xFF`), Error Packet (`0xFE`) with standard error decoding (`ERR_ACCESS_LOCKED`, `ERR_PAGE_NOT_VALID`, `ERR_CMD_BUSY`, `ERR_CMD_SYNTAX`), and Asynchronous Events (`0xFD`).
+  - Dissects Data Transfer Objects (DTO): Periodic DAQ measurement raster packets.
+- **CAN Calibration Protocol (CCP v2.1):**
+  - Dissects Command Receive Objects (CRO): `CONNECT` (`0x01`), `SET_MTA` (`0x02`), `DNLOAD` (`0x03`), `UPLOAD` (`0x04`), `GET_SEED` (`0x0C`), `UNLOCK` (`0x0D`), and `DISCONNECT` (`0x17`).
+  - Dissects Command Return Messages (CRM): Packet Return Code and Command Counter auditing.
+
+---
+
+## 10. AUTOSAR CAN Network Management (CAN NM)
+
+The AUTOSAR CAN NM dissector monitors ECU sleep/wake transitions and cluster bus readiness:
+
+- **Base ID Filtering:** Detects standard AUTOSAR NM identifiers (`0x400..=0x6FF` or 29-bit `0x18CB...`).
+- **Source Node Identification:** Extracts sending controller Node ID from Byte 0.
+- **Control Bit Vector (CBV):** Decodes operational state requests:
+  - `Repeat Message Request` (Bit 0): Node requests all cluster participants stay awake and restart repeat message cycle.
+  - `Active Wakeup Bit` (Bit 3): Identifies the specific node that woke up the physical CAN bus cluster.
+  - `Partial Network Information` (Bit 6): Validates whether user data bytes contain Partial Network Cluster (PNC) membership bitmasks.
+- **User Data:** Extracts application-level cluster data and sleep readiness signals.
+
+---
+
+## 11. Modbus Device Identification (FC 0x2B / 0x0E)
 
 Modbus Encapsulated Interface (MEI Type `0x0E`) provides non-intrusive vendor and model interrogation:
 
@@ -148,7 +187,7 @@ Modbus Encapsulated Interface (MEI Type `0x0E`) provides non-intrusive vendor an
 
 ---
 
-## 10. Standards Compliance Auditing
+## 12. Standards Compliance Auditing
 
 Inspired by Zeek ICSNPP, the compliance auditor compares real-time bus traffic against specification constraints:
 
