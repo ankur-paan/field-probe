@@ -56,16 +56,34 @@ impl ModbusExceptionCode {
 
     pub fn description(&self) -> &'static str {
         match self {
-            Self::IllegalFunction => "Function code received in query is not an allowable action for server.",
-            Self::IllegalDataAddress => "Address range specified in query exceeds server memory boundary.",
-            Self::IllegalDataValue => "Value in query data field is outside acceptable range or count is invalid.",
-            Self::ServerDeviceFailure => "Unrecoverable error occurred while server attempted requested action.",
-            Self::Acknowledge => "Server accepted request and is processing it; requires prolonged duration.",
-            Self::ServerDeviceBusy => "Server engaged in long-duration command; master should retransmit later.",
-            Self::NegativeAcknowledge => "Server cannot perform programming request received in query.",
-            Self::MemoryParityError => "Server detected parity error in extended memory attempted to read.",
+            Self::IllegalFunction => {
+                "Function code received in query is not an allowable action for server."
+            }
+            Self::IllegalDataAddress => {
+                "Address range specified in query exceeds server memory boundary."
+            }
+            Self::IllegalDataValue => {
+                "Value in query data field is outside acceptable range or count is invalid."
+            }
+            Self::ServerDeviceFailure => {
+                "Unrecoverable error occurred while server attempted requested action."
+            }
+            Self::Acknowledge => {
+                "Server accepted request and is processing it; requires prolonged duration."
+            }
+            Self::ServerDeviceBusy => {
+                "Server engaged in long-duration command; master should retransmit later."
+            }
+            Self::NegativeAcknowledge => {
+                "Server cannot perform programming request received in query."
+            }
+            Self::MemoryParityError => {
+                "Server detected parity error in extended memory attempted to read."
+            }
             Self::GatewayPathUnavailable => "Gateway overload or internal bus path unallocated.",
-            Self::GatewayTargetDeviceFailedToRespond => "Gateway received no response from targeted downstream slave.",
+            Self::GatewayTargetDeviceFailedToRespond => {
+                "Gateway received no response from targeted downstream slave."
+            }
             Self::Unknown => "Unrecognized vendor-specific or malformed exception code.",
         }
     }
@@ -177,6 +195,19 @@ pub enum ModbusPdu {
         raw_code: u8,
     },
 
+    // Encapsulated Interface Transport (MEI FC 0x2B / 0x0E)
+    ReadDeviceIdentificationQuery {
+        read_device_id_code: u8,
+        object_id: u8,
+    },
+    ReadDeviceIdentificationResponse {
+        read_device_id_code: u8,
+        conformity_level: u8,
+        more_follows: bool,
+        next_object_id: u8,
+        objects: Vec<(u8, String)>,
+    },
+
     // Unhandled / vendor specific
     Raw {
         function_code: u8,
@@ -213,10 +244,29 @@ fn parse_pdu(input: &[u8]) -> IResult<&[u8], ModbusPdu> {
         // Query has 4 bytes (start_addr: u16, quantity: u16)
         // Response has byte_count: u8 followed by data
         0x01 => {
-            if input.len() == 4 {
+            // A ReadCoils response has byte_count as first byte.
+            // If input.len() == 4 and input[0] == 3, it is a 3-byte coil response ([0x03, b0, b1, b2]).
+            if input.len() == 4 && input[0] == 3 {
+                let (input, byte_count) = be_u8(input)?;
+                let (input, data) = take(byte_count as usize)(input)?;
+                Ok((
+                    input,
+                    ModbusPdu::ReadResponse {
+                        function_code: fc,
+                        byte_count,
+                        data: data.to_vec(),
+                    },
+                ))
+            } else if input.len() == 4 {
                 let (input, start_addr) = be_u16(input)?;
                 let (input, quantity) = be_u16(input)?;
-                Ok((input, ModbusPdu::ReadCoilsQuery { start_addr, quantity }))
+                Ok((
+                    input,
+                    ModbusPdu::ReadCoilsQuery {
+                        start_addr,
+                        quantity,
+                    },
+                ))
             } else if !input.is_empty() {
                 let (input, byte_count) = be_u8(input)?;
                 let (input, data) = take(byte_count as usize)(input)?;
@@ -229,14 +279,39 @@ fn parse_pdu(input: &[u8]) -> IResult<&[u8], ModbusPdu> {
                     },
                 ))
             } else {
-                Ok((input, ModbusPdu::Raw { function_code: fc, payload: input.to_vec() }))
+                Ok((
+                    input,
+                    ModbusPdu::Raw {
+                        function_code: fc,
+                        payload: input.to_vec(),
+                    },
+                ))
             }
         }
         0x02 => {
-            if input.len() == 4 {
+            // A ReadDiscreteInputs response has byte_count as first byte.
+            // If input.len() == 4 and input[0] == 3, it is a 3-byte discrete input response ([0x03, b0, b1, b2]).
+            if input.len() == 4 && input[0] == 3 {
+                let (input, byte_count) = be_u8(input)?;
+                let (input, data) = take(byte_count as usize)(input)?;
+                Ok((
+                    input,
+                    ModbusPdu::ReadResponse {
+                        function_code: fc,
+                        byte_count,
+                        data: data.to_vec(),
+                    },
+                ))
+            } else if input.len() == 4 {
                 let (input, start_addr) = be_u16(input)?;
                 let (input, quantity) = be_u16(input)?;
-                Ok((input, ModbusPdu::ReadDiscreteInputsQuery { start_addr, quantity }))
+                Ok((
+                    input,
+                    ModbusPdu::ReadDiscreteInputsQuery {
+                        start_addr,
+                        quantity,
+                    },
+                ))
             } else if !input.is_empty() {
                 let (input, byte_count) = be_u8(input)?;
                 let (input, data) = take(byte_count as usize)(input)?;
@@ -249,7 +324,13 @@ fn parse_pdu(input: &[u8]) -> IResult<&[u8], ModbusPdu> {
                     },
                 ))
             } else {
-                Ok((input, ModbusPdu::Raw { function_code: fc, payload: input.to_vec() }))
+                Ok((
+                    input,
+                    ModbusPdu::Raw {
+                        function_code: fc,
+                        payload: input.to_vec(),
+                    },
+                ))
             }
         }
         0x03 => {
@@ -275,14 +356,26 @@ fn parse_pdu(input: &[u8]) -> IResult<&[u8], ModbusPdu> {
                     },
                 ))
             } else {
-                Ok((input, ModbusPdu::Raw { function_code: fc, payload: input.to_vec() }))
+                Ok((
+                    input,
+                    ModbusPdu::Raw {
+                        function_code: fc,
+                        payload: input.to_vec(),
+                    },
+                ))
             }
         }
         0x04 => {
             if input.len() == 4 {
                 let (input, start_addr) = be_u16(input)?;
                 let (input, quantity) = be_u16(input)?;
-                Ok((input, ModbusPdu::ReadInputRegistersQuery { start_addr, quantity }))
+                Ok((
+                    input,
+                    ModbusPdu::ReadInputRegistersQuery {
+                        start_addr,
+                        quantity,
+                    },
+                ))
             } else if !input.is_empty() {
                 let (input, byte_count) = be_u8(input)?;
                 let (input, data) = take(byte_count as usize)(input)?;
@@ -295,7 +388,13 @@ fn parse_pdu(input: &[u8]) -> IResult<&[u8], ModbusPdu> {
                     },
                 ))
             } else {
-                Ok((input, ModbusPdu::Raw { function_code: fc, payload: input.to_vec() }))
+                Ok((
+                    input,
+                    ModbusPdu::Raw {
+                        function_code: fc,
+                        payload: input.to_vec(),
+                    },
+                ))
             }
         }
         0x05 => {
@@ -349,7 +448,13 @@ fn parse_pdu(input: &[u8]) -> IResult<&[u8], ModbusPdu> {
                 ))
             } else {
                 let (remaining, payload) = take(input.len())(input)?;
-                Ok((remaining, ModbusPdu::Raw { function_code: fc, payload: payload.to_vec() }))
+                Ok((
+                    remaining,
+                    ModbusPdu::Raw {
+                        function_code: fc,
+                        payload: payload.to_vec(),
+                    },
+                ))
             }
         }
         0x10 => {
@@ -382,7 +487,79 @@ fn parse_pdu(input: &[u8]) -> IResult<&[u8], ModbusPdu> {
                 ))
             } else {
                 let (remaining, payload) = take(input.len())(input)?;
-                Ok((remaining, ModbusPdu::Raw { function_code: fc, payload: payload.to_vec() }))
+                Ok((
+                    remaining,
+                    ModbusPdu::Raw {
+                        function_code: fc,
+                        payload: payload.to_vec(),
+                    },
+                ))
+            }
+        }
+        0x2B if !input.is_empty() && input[0] == 0x0E => {
+            let (input, _mei_type) = be_u8(input)?;
+            if input.len() == 2 {
+                // Query: Read Device ID code (1 byte), Object ID (1 byte)
+                let (input, read_device_id_code) = be_u8(input)?;
+                let (input, object_id) = be_u8(input)?;
+                Ok((
+                    input,
+                    ModbusPdu::ReadDeviceIdentificationQuery {
+                        read_device_id_code,
+                        object_id,
+                    },
+                ))
+            } else if input.len() >= 5 {
+                // Response:
+                // Read Device ID code (1 byte)
+                // Conformity level (1 byte)
+                // More follows (1 byte)
+                // Next Object ID (1 byte)
+                // Number of objects (1 byte)
+                // Object list: [ID, Length, Value bytes...]
+                let (input, read_device_id_code) = be_u8(input)?;
+                let (input, conformity_level) = be_u8(input)?;
+                let (input, more_follows_byte) = be_u8(input)?;
+                let (input, next_object_id) = be_u8(input)?;
+                let (mut input, num_objects) = be_u8(input)?;
+
+                let more_follows = more_follows_byte != 0;
+                let mut objects = Vec::with_capacity(num_objects as usize);
+
+                for _ in 0..num_objects {
+                    if input.len() < 2 {
+                        break;
+                    }
+                    let (rem, obj_id) = be_u8(input)?;
+                    let (rem, obj_len) = be_u8(rem)?;
+                    if rem.len() < obj_len as usize {
+                        break;
+                    }
+                    let (rem, val_bytes) = take(obj_len as usize)(rem)?;
+                    let val_str = String::from_utf8_lossy(val_bytes).to_string();
+                    objects.push((obj_id, val_str));
+                    input = rem;
+                }
+
+                Ok((
+                    input,
+                    ModbusPdu::ReadDeviceIdentificationResponse {
+                        read_device_id_code,
+                        conformity_level,
+                        more_follows,
+                        next_object_id,
+                        objects,
+                    },
+                ))
+            } else {
+                let (remaining, payload) = take(input.len())(input)?;
+                Ok((
+                    remaining,
+                    ModbusPdu::Raw {
+                        function_code: fc,
+                        payload: payload.to_vec(),
+                    },
+                ))
             }
         }
         _ => {
@@ -461,6 +638,16 @@ pub fn parse_modbus_tcp_frame(raw: &[u8]) -> Option<ModbusTcpAdu> {
     })
 }
 
+impl ModbusPdu {
+    pub fn exception_name(&self) -> Option<&'static str> {
+        if let ModbusPdu::Exception { exception_code, .. } = self {
+            Some(exception_code.name())
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,11 +678,17 @@ mod tests {
     #[test]
     fn test_parse_read_holding_registers_response() {
         // Slave 1, FC 0x03, Byte Count 6, Registers [0x022B, 0x0000, 0x0064], CRC
-        let raw = [0x01, 0x03, 0x06, 0x02, 0x2B, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00];
+        let raw = [
+            0x01, 0x03, 0x06, 0x02, 0x2B, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00,
+        ];
         let adu = parse_modbus_rtu_frame(&raw).expect("Valid Modbus response");
         assert_eq!(adu.slave_id, 0x01);
         match adu.pdu {
-            ModbusPdu::ReadResponse { function_code, byte_count, data } => {
+            ModbusPdu::ReadResponse {
+                function_code,
+                byte_count,
+                data,
+            } => {
                 assert_eq!(function_code, 0x03);
                 assert_eq!(byte_count, 6);
                 assert_eq!(data, vec![0x02, 0x2B, 0x00, 0x00, 0x00, 0x64]);
@@ -518,7 +711,10 @@ mod tests {
                 raw_code: 0x02,
             }
         );
-        assert_eq!(adu.pdu.exception_name().unwrap_or(""), "Illegal Data Address");
+        assert_eq!(
+            adu.pdu.exception_name().unwrap_or(""),
+            "Illegal Data Address"
+        );
     }
 
     #[test]
@@ -538,7 +734,9 @@ mod tests {
     #[test]
     fn test_parse_modbus_tcp_frame() {
         // Transaction 0x0001, Proto 0x0000, Length 0x0006, Unit 0x01, FC 0x03, Start 0x0000, Qty 0x0001
-        let tcp_raw = [0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03, 0x00, 0x00, 0x00, 0x01];
+        let tcp_raw = [
+            0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03, 0x00, 0x00, 0x00, 0x01,
+        ];
         let adu = parse_modbus_tcp_frame(&tcp_raw).expect("Valid Modbus TCP frame");
         assert_eq!(adu.transaction_id, 1);
         assert_eq!(adu.unit_id, 1);
@@ -551,6 +749,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_parse_read_coils_3byte_response_collision() {
+        // FC 0x01, byte count 3, 3 data bytes = 4 bytes input after FC!
+        // ADU: Slave 1, FC 0x01, ByteCount 0x03, Data [0xAA, 0xBB, 0xCC], CRC [0x12, 0x34]
+        let raw = [0x01, 0x01, 0x03, 0xAA, 0xBB, 0xCC, 0x12, 0x34];
+        let adu = parse_modbus_rtu_frame(&raw).expect("Valid ReadCoils response");
+        assert_eq!(
+            adu.pdu,
+            ModbusPdu::ReadResponse {
+                function_code: 0x01,
+                byte_count: 3,
+                data: vec![0xAA, 0xBB, 0xCC],
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_read_device_identification_query() {
+        // Slave 1, FC 0x2B, MEI 0x0E, ReadDevId 0x01 (Basic), ObjectId 0x00, CRC [0x30, 0x39]
+        let raw = [0x01, 0x2B, 0x0E, 0x01, 0x00, 0x70, 0x77];
+        let adu = parse_modbus_rtu_frame(&raw).expect("Valid ReadDevId query");
+        assert_eq!(
+            adu.pdu,
+            ModbusPdu::ReadDeviceIdentificationQuery {
+                read_device_id_code: 0x01,
+                object_id: 0x00,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_read_device_identification_response() {
+        // Slave 1, FC 0x2B, MEI 0x0E, ReadDevId 0x01, Conformity 0x81, MoreFollows 0x00, NextObj 0x00, NumObjs 2
+        // Obj 0: len 3, "ABC"
+        // Obj 1: len 4, "1234"
+        let raw = [
+            0x01, 0x2B, 0x0E, 0x01, 0x81, 0x00, 0x00, 0x02, 0x00, 0x03, b'A', b'B', b'C', 0x01,
+            0x04, b'1', b'2', b'3', b'4', 0x12, 0x34, // CRC placeholder
+        ];
+        let adu = parse_modbus_rtu_frame(&raw).expect("Valid ReadDevId response");
+        match adu.pdu {
+            ModbusPdu::ReadDeviceIdentificationResponse {
+                read_device_id_code,
+                conformity_level,
+                more_follows,
+                next_object_id,
+                objects,
+            } => {
+                assert_eq!(read_device_id_code, 0x01);
+                assert_eq!(conformity_level, 0x81);
+                assert!(!more_follows);
+                assert_eq!(next_object_id, 0x00);
+                assert_eq!(objects.len(), 2);
+                assert_eq!(objects[0], (0x00, "ABC".to_string()));
+                assert_eq!(objects[1], (0x01, "1234".to_string()));
+            }
+            other => panic!("Expected ReadDeviceIdentificationResponse, got {:?}", other),
+        }
+    }
+
     // Property-based fuzz tests: random byte sequences MUST NEVER panic
     proptest! {
         #[test]
@@ -561,16 +819,6 @@ mod tests {
         #[test]
         fn fuzz_modbus_tcp_never_panics(data in proptest::collection::vec(any::<u8>(), 0..512)) {
             let _ = parse_modbus_tcp_frame(&data);
-        }
-    }
-}
-
-impl ModbusPdu {
-    pub fn exception_name(&self) -> Option<&'static str> {
-        if let ModbusPdu::Exception { exception_code, .. } = self {
-            Some(exception_code.name())
-        } else {
-            None
         }
     }
 }

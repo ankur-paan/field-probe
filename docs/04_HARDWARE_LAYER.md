@@ -40,7 +40,39 @@ pub trait BusInterface: Send + Sync {
 
 ---
 
-## 4. Transmission Safety Rules
+## 4. Hardware Drivers and Adapters
+
+`fp-hal` includes production drivers implementing `BusInterface`:
+
+- **SLCAN Driver (`SlcanDriver`):**  
+  Communicates with CAN-to-USB adapters using the ASCII SLCAN protocol (Lawicel / CANable / Candlelight).  
+  Initializes in Tier-0 listen-only mode using commands `["C\r", "S6\r", "L\r"]`.  
+  Supports standard 11-bit (`t`), extended 29-bit (`T`), RTR (`r`/`R`), and CAN-FD (`d`/`D`/`b`/`B`) frames.
+
+- **Serial Driver (`SerialDriver`):**  
+  Interfaces with RS-485/RS-232 serial transceivers.  
+  Measures microsecond inter-chunk arrival gaps with `Instant` timestamps to detect Modbus 3.5-character silent intervals.  
+  Enforces hardware transceiver gating by holding RTS/DTR de-asserted in listen-only mode.
+
+- **SocketCAN Driver (`SocketCanDriver`):**  
+  Interfaces with Linux native `can0`/`vcan0` devices.  
+  Enforces kernel listen-only socket flags and translates Linux `<linux/can/error.h>` bitmasks into structured `BusErrorFlags`.
+
+- **Asynchronous Driver Background Loops:**  
+  All hardware drivers initiate a non-blocking background reader task (`tokio::spawn`) upon connection.  
+  The background loop receives raw frames from the physical bus, attaches microsecond timestamps, formats `RawBusEvent` records, and broadcasts them across the internal bus channel.
+
+- **Unified Dongle Enumeration (`fp_hal::enumerate_dongles`):**  
+  Scans operating system serial and CAN interfaces. Maps USB vendor/product IDs (VID/PID) to industrial interface chips (FTDI FT232, CH340, CP2102, CANable STM32, GS-USB) and reports hardware listen-only capabilities.
+
+- **Asynchronous File Replay Streaming (`spawn_file_replay`):**  
+  Spawns an async task that streams parsed events from `.candump` or `.pcapng` files into the broadcast channel.  
+  This provides deterministic simulation for offline field testing and continuous integration without physical dongles.
+
+
+---
+
+## 5. Transmission Safety Rules
 
 1. If the current tier is `PassiveListenOnly`, `transmit()` must fail immediately.
 2. If the permit is expired, `transmit()` must fail immediately.

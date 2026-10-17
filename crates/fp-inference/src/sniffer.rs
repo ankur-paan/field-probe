@@ -138,7 +138,10 @@ impl CanSnifferEngine {
 
     /// Ingest a frame and return delta report if relevant bits changed
     pub fn ingest_frame(&mut self, frame: &CanFrame) -> Option<BitDeltaReport> {
-        let slot = self.slots.entry(frame.id).or_insert_with(|| SnifferSlot::new(frame.id));
+        let slot = self
+            .slots
+            .entry(frame.id)
+            .or_insert_with(|| SnifferSlot::new(frame.id));
         slot.update(frame, self.default_hold_ticks)
     }
 
@@ -179,7 +182,9 @@ mod tests {
 
         // Frame 4: Byte 1 changes from 0x00 to 0x80 (unnotched bit, should trigger)
         let f4 = CanFrame::new_standard(0x123, &[0x00, 0x80, 0x00, 0x00]);
-        let rep4 = engine.ingest_frame(&f4).expect("Delta expected on unnotched byte");
+        let rep4 = engine
+            .ingest_frame(&f4)
+            .expect("Delta expected on unnotched byte");
         assert_eq!(rep4.active_delta[1], 0x80);
     }
 }

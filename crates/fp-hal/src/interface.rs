@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use fp_core::{
-    AdapterCapabilities, HalError, LinkParams, OutboundFrame, RawBusEvent, SafetyPermit,
-    SafetyTier,
+    AdapterCapabilities, HalError, LinkParams, OutboundFrame, RawBusEvent, SafetyPermit, SafetyTier,
 };
 use tokio::sync::broadcast;
 

@@ -1,5 +1,5 @@
-use fp_core::{AdapterCapabilities, BusProtocol, IndustrialChip, SafetyPermit, SafetyTier};
-use fp_crypto::KeyRing;
+use fp_core::{AdapterCapabilities, BusProtocol, SafetyPermit, SafetyTier};
+use fp_crypto::{KeyRing, KeyType, ManagedKey};
 use fp_dissectors::{ComplianceReport, ModbusRtuAdu};
 use fp_inference::InferenceEngine;
 use serde::{Deserialize, Serialize};
@@ -50,29 +50,17 @@ impl Default for McpServerState {
 
 impl McpServerState {
     pub fn new() -> Self {
-        let dummy_adapter = AdapterCapabilities {
-            interface_id: "usb-serial-port-0".to_string(),
-            chip_type: IndustrialChip::FtdiFt232,
-            supports_serial: true,
-            supports_can: false,
-            supports_can_fd: false,
-            supports_listen_only: true,
-            supported_baud_rates: vec![9600, 19200, 38400, 57600, 115200],
-            supported_can_bitrates: vec![],
-            usb_vid: Some(0x0403),
-            usb_pid: Some(0x6001),
-            serial_number: Some("FT232R-01".to_string()),
-            description: "FTDI FT232R USB-to-RS485 Dongle".to_string(),
-        };
-
+        let keyring = KeyRing::new();
+        let mut inference_engine = InferenceEngine::new(500_000, 1000);
+        inference_engine.keyring = keyring.clone();
         Self {
-            inference_engine: InferenceEngine::new(500_000, 1000),
-            keyring: Arc::new(KeyRing::new()),
+            inference_engine,
+            keyring: Arc::new(keyring),
             compliance_report: ComplianceReport::new(),
             current_safety_tier: SafetyTier::PassiveListenOnly, // Tier-0 Zero-TX invariant
             detected_protocol: BusProtocol::ModbusRtu,
             detected_baud_rate: 9600,
-            interfaces: vec![dummy_adapter],
+            interfaces: fp_hal::enumerate_dongles(),
         }
     }
 
@@ -91,6 +79,7 @@ impl McpServerState {
             "correlate_physical_change" => self.tool_correlate_physical_change(arguments),
             "load_security_key" => self.tool_load_security_key(arguments),
             "request_active_probe" => self.tool_request_active_probe(arguments),
+            "export_bus_artifacts" => self.tool_export_bus_artifacts(arguments),
             _ => Err(McpError::new(-32601, format!("Unknown tool '{}'", name))),
         }
     }
@@ -116,7 +105,10 @@ impl McpServerState {
         Ok(json!({ "dongles": list }))
     }
 
-    fn tool_auto_detect_bus(&mut self, _args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+    fn tool_auto_detect_bus(
+        &mut self,
+        _args: &serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
         Ok(json!({
             "detected_protocol": format!("{:?}", self.detected_protocol),
             "baud_rate": self.detected_baud_rate,
@@ -127,7 +119,10 @@ impl McpServerState {
         }))
     }
 
-    fn tool_get_bus_summary(&self, _args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+    fn tool_get_bus_summary(
+        &self,
+        _args: &serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
         let summary = self.inference_engine.get_summary();
         Ok(json!({
             "protocol": format!("{:?}", self.detected_protocol),
@@ -140,7 +135,10 @@ impl McpServerState {
         }))
     }
 
-    fn tool_get_register_catalog(&self, _args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+    fn tool_get_register_catalog(
+        &self,
+        _args: &serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
         let entries = self
             .inference_engine
             .catalog
@@ -154,7 +152,10 @@ impl McpServerState {
         }))
     }
 
-    fn tool_run_compliance_audit(&self, _args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+    fn tool_run_compliance_audit(
+        &self,
+        _args: &serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
         Ok(json!({
             "total_frames_analyzed": self.compliance_report.total_frames_analyzed,
             "crc_errors": self.compliance_report.crc_error_count,
@@ -164,8 +165,14 @@ impl McpServerState {
         }))
     }
 
-    fn tool_correlate_physical_change(&mut self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
-        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("snapshot");
+    fn tool_correlate_physical_change(
+        &mut self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
+        let action = args
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("snapshot");
         match action {
             "start" => {
                 self.inference_engine.start_diff_capture(1_000_000);
@@ -187,29 +194,66 @@ impl McpServerState {
         }
     }
 
-    fn tool_load_security_key(&mut self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+    fn tool_load_security_key(
+        &mut self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
         let key_id = args
             .get("key_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::invalid_params("Missing key_id"))?;
         let hex_bytes = args
-            .get("hex_bytes")
+            .get("secret_hex")
+            .or_else(|| args.get("hex_bytes"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| McpError::invalid_params("Missing hex_bytes"))?;
+            .ok_or_else(|| McpError::invalid_params("Missing secret_hex or hex_bytes"))?;
 
-        let bytes = hex_decode(hex_bytes).map_err(|_| McpError::invalid_params("Invalid hex_bytes string"))?;
-        self.keyring.insert_symmetric_key(key_id, &bytes);
+        let key_type_str = args
+            .get("key_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Aes128");
+
+        let key_type = match key_type_str {
+            "Aes128" => KeyType::Aes128,
+            "Aes256" => KeyType::Aes256,
+            "TlsCertificate" => KeyType::TlsCertificate,
+            "XorMask" => KeyType::XorMask,
+            "CustomSeed" => KeyType::CustomSeed,
+            _ => KeyType::Aes128,
+        };
+
+        let target_scope = args
+            .get("target_scope")
+            .and_then(|v| v.as_str())
+            .unwrap_or("global");
+
+        let bytes =
+            hex_decode(hex_bytes).map_err(|_| McpError::invalid_params("Invalid hex string"))?;
+        self.keyring.insert_key(ManagedKey {
+            key_id: key_id.to_string(),
+            key_type,
+            target_scope: target_scope.to_string(),
+            secret_bytes: bytes.clone(),
+        });
 
         Ok(json!({
             "status": "Key stored successfully in KeyRing",
             "key_id": key_id,
+            "key_type": key_type_str,
+            "target_scope": target_scope,
             "key_len_bytes": bytes.len()
         }))
     }
 
-    fn tool_request_active_probe(&mut self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+    fn tool_request_active_probe(
+        &mut self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
         // Strict Tier-0 Zero-TX boundary check
-        let token = args.get("permit_token").and_then(|v| v.as_str());
+        let token = args
+            .get("permit_id")
+            .or_else(|| args.get("permit_token"))
+            .and_then(|v| v.as_str());
 
         if token.is_none() || self.current_safety_tier == SafetyTier::PassiveListenOnly {
             return Err(McpError::safety_violation(
@@ -217,22 +261,83 @@ impl McpServerState {
             ));
         }
 
+        let scope = args
+            .get("scope")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let signature = args.get("signature").and_then(|v| v.as_str());
+
         // Validate permit
-        let permit = SafetyPermit::new(
-            "mcp-probe-token",
+        let mut permit = SafetyPermit::new(
+            token.unwrap_or("mcp-probe-token"),
             SafetyTier::ReadOnlyProbe,
             "mcp-operator",
             chrono::Utc::now() + chrono::Duration::minutes(10),
-            None,
+            scope,
         );
 
+        if self.keyring.has_operator_keys() {
+            let sig = signature.ok_or_else(|| {
+                McpError::safety_violation(
+                    "Active probing BLOCKED: KeyRing contains configured operator secrets. An explicit cryptographic permit signature is REQUIRED.",
+                )
+            })?;
+            permit = permit.with_signature(sig);
+            if !self.keyring.verify_permit(&permit) {
+                return Err(McpError::safety_violation(
+                    "Supplied safety permit signature is INVALID",
+                ));
+            }
+        } else if let Some(sig) = signature {
+            permit = permit.with_signature(sig);
+            if !self.keyring.verify_permit(&permit) {
+                return Err(McpError::safety_violation(
+                    "Supplied safety permit signature is INVALID",
+                ));
+            }
+        }
+
         if !permit.is_valid_for(SafetyTier::ReadOnlyProbe, chrono::Utc::now()) {
-            return Err(McpError::safety_violation("Supplied safety permit has expired"));
+            return Err(McpError::safety_violation(
+                "Supplied safety permit has expired",
+            ));
         }
 
         Ok(json!({
             "status": "Active probe dispatched under Tier-1 ReadOnlyProbe authorization",
-            "probe_type": "Read Device Identification (FC 0x2B / 0x0E)"
+            "probe_type": "Read Device Identification (FC 0x2B / 0x0E)",
+            "permit_id": permit.permit_id
+        }))
+    }
+
+    fn tool_export_bus_artifacts(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
+        let format = args
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("json")
+            .to_lowercase();
+
+        let artifact = match format.as_str() {
+            "dbc" => {
+                let msgs = vec![];
+                fp_inference::export_dbc(&msgs)
+            }
+            "pcapng" => {
+                let bytes = fp_inference::export_pcapng(&[]);
+                format!("PCAP-NG export: {} bytes formatted", bytes.len())
+            }
+            "telegraf" => fp_inference::export_telegraf(&self.inference_engine.catalog),
+            "nodered" => fp_inference::export_nodered_flow(&self.inference_engine.catalog),
+            _ => fp_inference::export_json(&self.inference_engine.catalog),
+        };
+
+        Ok(json!({
+            "status": "success",
+            "format": format,
+            "artifact": artifact
         }))
     }
 
@@ -274,15 +379,19 @@ mod tests {
     #[test]
     fn test_mcp_list_dongles() {
         let mut state = McpServerState::new();
-        let res = state.execute_tool("list_dongles", &json!({})).expect("Tool executed");
-        assert!(res["dongles"].as_array().unwrap().len() >= 1);
+        let res = state
+            .execute_tool("list_dongles", &json!({}))
+            .expect("Tool executed");
+        assert!(!res["dongles"].as_array().unwrap().is_empty());
         assert_eq!(res["dongles"][0]["zero_tx_enforced"], true);
     }
 
     #[test]
     fn test_mcp_active_probe_rejected_under_tier0() {
         let mut state = McpServerState::new();
-        let err = state.execute_tool("request_active_probe", &json!({})).unwrap_err();
+        let err = state
+            .execute_tool("request_active_probe", &json!({}))
+            .unwrap_err();
         assert_eq!(err.code, 4003);
         assert!(err.message.contains("BLOCKED"));
     }
@@ -294,8 +403,62 @@ mod tests {
             "key_id": "secoc-key-1",
             "hex_bytes": "00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F"
         });
-        let res = state.execute_tool("load_security_key", &args).expect("Tool executed");
+        let res = state
+            .execute_tool("load_security_key", &args)
+            .expect("Tool executed");
         assert_eq!(res["key_len_bytes"], 16);
         assert!(state.keyring.get_symmetric_key("secoc-key-1").is_some());
+        // Regression test for Bug 1.1: Shared KeyRing reaches InferenceEngine
+        assert!(state
+            .inference_engine
+            .keyring
+            .get_symmetric_key("secoc-key-1")
+            .is_some());
+    }
+
+    #[test]
+    fn test_mcp_active_probe_signature_enforcement() {
+        use fp_core::SafetyTier;
+        let mut state = McpServerState::new();
+        // Elevate safety tier to Tier-1
+        state.current_safety_tier = SafetyTier::ReadOnlyProbe;
+
+        // Load an OperatorSecret
+        let key_args = json!({
+            "key_id": "op-secret",
+            "key_type": "OperatorSecret",
+            "target_scope": "operator",
+            "hex_bytes": "01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10 11 12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F 20"
+        });
+        state.execute_tool("load_security_key", &key_args).unwrap();
+
+        // Attempt probe without signature -> MUST FAIL
+        let probe_args = json!({
+            "permit_token": "valid-token-123"
+        });
+        let err = state
+            .execute_tool("request_active_probe", &probe_args)
+            .unwrap_err();
+        assert_eq!(err.code, 4003);
+        assert!(err.message.contains("permit signature is REQUIRED"));
+
+        // Sign the permit properly and retry -> MUST SUCCEED
+        let mut permit = fp_core::SafetyPermit::new(
+            "valid-token-123",
+            SafetyTier::ReadOnlyProbe,
+            "mcp-operator",
+            chrono::Utc::now() + chrono::Duration::minutes(10),
+            None,
+        );
+        assert!(state.keyring.sign_permit("op-secret", &mut permit));
+
+        let signed_args = json!({
+            "permit_token": "valid-token-123",
+            "signature": permit.signature.unwrap()
+        });
+        let res = state
+            .execute_tool("request_active_probe", &signed_args)
+            .expect("Signed probe succeeds");
+        assert_eq!(res["permit_id"], "valid-token-123");
     }
 }

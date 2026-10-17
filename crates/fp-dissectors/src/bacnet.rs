@@ -74,6 +74,25 @@ pub fn calculate_bacnet_crc8(data: &[u8]) -> u8 {
     !crc
 }
 
+/// Calculate BACnet MS/TP Data CRC-16
+/// Polynomial: X^16 + X^12 + X^5 + 1 (CCITT 0x1021, reflected 0x8408)
+/// Initial value: 0xFFFF, invert at end (!crc)
+pub fn calculate_bacnet_data_crc16(data: &[u8]) -> u16 {
+    let mut crc: u16 = 0xFFFF;
+    for &b in data {
+        let mut data_byte = b as u16;
+        for _ in 0..8 {
+            let feedback = (crc ^ data_byte) & 0x0001;
+            crc >>= 1;
+            if feedback != 0 {
+                crc ^= 0x8408; // Reflected CCITT 0x1021 -> 0x8408
+            }
+            data_byte >>= 1;
+        }
+    }
+    !crc
+}
+
 /// Dissect BACnet MS/TP Frame from byte buffer.
 /// Preambles: 0x55 0xFF
 pub fn dissect_bacnet_mstp(raw: &[u8]) -> Option<BacnetMstpFrame> {
@@ -115,6 +134,13 @@ pub fn dissect_bacnet_mstp(raw: &[u8]) -> Option<BacnetMstpFrame> {
     if raw.len() >= 8 + payload_len + 2 {
         let payload = raw[8..8 + payload_len].to_vec();
         let data_crc = u16::from_le_bytes([raw[8 + payload_len], raw[8 + payload_len + 1]]);
+
+        // Validate Data CRC-16
+        let calculated_data_crc = calculate_bacnet_data_crc16(&payload);
+        if calculated_data_crc != data_crc {
+            return None;
+        }
+
         Some(BacnetMstpFrame {
             frame_type,
             destination_address,
@@ -146,6 +172,36 @@ mod tests {
         assert_eq!(frame.destination_address, 2);
         assert_eq!(frame.source_address, 1);
         assert_eq!(frame.data_length, 0);
+    }
+
+    #[test]
+    fn test_bacnet_data_frame_with_crc16() {
+        // Frame Type 5: BacnetDataExpectingReply, Dest 0x0A, Source 0x05, Length 0x0004
+        let header_data = [0x05, 0x0A, 0x05, 0x00, 0x04];
+        let header_crc = calculate_bacnet_crc8(&header_data);
+        let payload = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let data_crc = calculate_bacnet_data_crc16(&payload);
+
+        let mut frame_bytes = vec![0x55, 0xFF];
+        frame_bytes.extend_from_slice(&header_data);
+        frame_bytes.push(header_crc);
+        frame_bytes.extend_from_slice(&payload);
+        frame_bytes.extend_from_slice(&data_crc.to_le_bytes());
+
+        // Valid frame with valid data CRC
+        let frame = dissect_bacnet_mstp(&frame_bytes).expect("Valid BACnet Data frame with CRC-16");
+        assert_eq!(
+            frame.frame_type,
+            BacnetMstpFrameType::BacnetDataExpectingReply
+        );
+        assert_eq!(frame.payload, payload);
+        assert_eq!(frame.data_crc, Some(data_crc));
+
+        // Corrupt data CRC should be rejected (returns None)
+        let mut corrupt_frame = frame_bytes.clone();
+        let last_idx = corrupt_frame.len() - 1;
+        corrupt_frame[last_idx] ^= 0xFF;
+        assert!(dissect_bacnet_mstp(&corrupt_frame).is_none());
     }
 
     proptest::proptest! {

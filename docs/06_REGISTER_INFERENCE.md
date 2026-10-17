@@ -28,17 +28,30 @@ The decoder tests adjacent 16-bit registers across four word orders:
 
 ## 3. Temporal Plausibility Scoring
 
-The engine tracks register value changes over successive polling cycles:
-- Physical variables (temperature, pressure, voltage) change smoothly over time.
-- If order `CDAB` yields 23.41 &rarr; 23.45 &rarr; 23.48, confidence is high (0.98).
-- If order `ABCD` yields -1.42e28 &rarr; 8.11e-12, confidence is low.
-- The engine ranks the most plausible engineering interpretation.
+The engine tracks register value changes over successive polling cycles across diverse industrial data types:
+
+- **Float32 Representations:** Evaluates IEEE 754 across all four word orders (CDAB, ABCD, BADC, DCBA), penalizing NaN/Inf and astronomical exponents while rewarding smooth physical deltas.
+- **Monotonic UInt32 Accumulators:** If successive 32-bit values increase monotonically ($\Delta \ge 0, \Delta \le 50000$), the engine scores the register at 0.95 confidence as an energy, flow, or hour totalizer.
+- **Printable ASCII Strings:** If adjacent register bytes fall within the `0x20..=0x7E` range, the engine scores the register at 0.95 confidence as an equipment model, serial number, or firmware tag.
+- **Fixed-Point Scaled Integers:** Detects standard industrial voltage ranges (`1900..=2600` with 0.1 scale = $190.0 \dots 260.0\text{ V}$), grid frequencies (`4950..=5050` with 0.01 scale = $49.50 \dots 50.50\text{ Hz}$), and signed temperatures (`-400..=1250` with 0.1 scale = $-40.0 \dots +125.0^\circ\text{C}$).
+- **Mod10000 Energy Totalizers:** Recognizes cascaded modulo-10,000 meter pairs (`r1 * 10,000 + r0`) standard in European energy monitors.
 
 ---
 
-## 4. Delta Isolation Mode
+## 4. Cryptographic Inspection & Payload Unmasking (fp-crypto)
 
-The operator triggers `start_diff_capture` and modifies a physical control:
-- The engine isolates only the bits that mutated during the window.
-- High-frequency counters and noise are filtered out.
-- The system returns the exact register address controlling that function.
+The inference engine continuously computes the Shannon entropy of incoming Modbus responses and CAN/CAN-FD frames:
+
+- **Shannon Entropy Detection:** Payloads exhibiting entropy $\ge 7.2\text{ bits/byte}$ or exceeding 92% of maximum possible theoretical entropy are flagged as encrypted or compressed.
+- **KeyRing Auto-Decryption:** If operator encryption keys or XOR masks are registered in `KeyRing` for the node scope (e.g. `Modbus:Slave1` or `CAN:0x123`), the engine automatically decrypts or unmasks the payload before applying semantic decoders.
+- **SecOC Verification:** Supports AUTOSAR SecOC message authentication using zero-dependency AES-128-CMAC (RFC 4493) to verify payload integrity and freshness counters.
+
+---
+
+## 5. Differential Capture with Automatic Ambient Noise Notching
+
+When correlating physical control actions (switches, relays, valves) against bus signals:
+
+- **Baseline Learning & Auto-Notching:** The session monitors ambient bus traffic before the operator actuates the device. Bits that oscillate on their own (analog noise, timestamps, rolling sequence counters) are automatically accumulated into a notch mask.
+- **Delta Isolation:** When the operator flips the physical switch, the engine compares the current snapshot against baseline, bitwise-masking out all notched ambient bits (`active_diff = raw_diff & !notch_mask`).
+- **Precision Pinpointing:** Only genuine bits directly caused by the physical actuation are emitted in the `DiffCaptureReport`.

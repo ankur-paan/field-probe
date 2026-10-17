@@ -1,14 +1,14 @@
 # 08. Field CLI and Workflows (fp-cli)
 
-> **Topic:** Terminal user interface and field wiring diagnostic procedures.
+> **Topic:** Terminal user interface, field wiring diagnostic procedures, and telemetry artifact export.
 
 ---
 
 ## 1. Description
 
-The `fp-cli` crate provides the native binary and Terminal User Interface (TUI).  
+The `fp-cli` crate provides the native binary, full-screen Terminal User Interface (TUI), and artifact export workflows.  
 Engineers use `fp` directly on a rugged field laptop without network access.  
-The interface displays live bus load, framing errors, and discovered registers.
+The interface displays live bus load, framing errors, discovered registers, and allows instant SCADA/Wireshark export.
 
 ---
 
@@ -29,9 +29,19 @@ Follow these steps when diagnosing an unknown cabinet:
    Attach the differential probe clips to the active bus lines (A and B, or CAN_H and CAN_L).
 
 2. **Launch field-probe in Passive Mode:**  
-   Execute the CLI binary:
+   Execute the CLI binary to start passive discovery on all detected interfaces:
    ```bash
    fp
+   ```
+   Or specify an explicit hardware interface:
+   ```bash
+   fp --interface can0
+   fp --interface COM3
+   ```
+   To diagnose captured traffic offline without physical hardware, execute replay mode:
+   ```bash
+   fp --replay field_dump.candump
+   fp --replay substation_capture.pcapng
    ```
    Verify the adapter status reports `SafetyTier::PassiveListenOnly`.
 
@@ -43,4 +53,67 @@ Follow these steps when diagnosing an unknown cabinet:
    Examine active node IDs, polling frequencies, and register values in the terminal table.
 
 5. **Execute Compliance Audit:**  
-   Review physical link warnings (e.g., termination resistor missing or wire polarity swapped).
+   Review physical link warnings (e.g., termination resistor missing or wire polarity swapped):
+   ```bash
+   fp audit
+   ```
+
+6. **Export Field Artifacts:**  
+   Export reverse-engineered database models and telemetry streams for SCADA/Wireshark tools:
+   ```bash
+   # Export Vector DBC database (synthesizes CAN messages and signal bit-slices):
+   fp export --format dbc
+   # Or using short flag:
+   fp export -f dbc
+   # Or using equals syntax:
+   fp export --format=dbc
+
+   # Export Wireshark PCAP-NG capture file:
+   fp export -f pcapng
+
+   # Export industrial collector configs:
+   fp export -f telegraf
+   fp export -f nodered
+   fp export -f json
+   ```
+
+   > [!NOTE]
+   > When exporting DBC (`--format dbc`), `fp` inspects active CAN sniffer slots. It synthesizes valid Vector DBC messages (`BO_`) and 8-bit signal definitions (`SG_`) for all observed CAN identifiers, preserving cycle intervals and payload layouts.
+
+---
+
+## 4. Interactive Terminal Dashboard (TUI)
+
+Executing `fp dashboard` launches the full-screen terminal user interface powered by `ratatui` and `crossterm`:
+
+```bash
+# Launch interactive dashboard on default interface:
+fp dashboard
+
+# Launch interactive dashboard on specific hardware interface:
+fp dashboard --interface can0
+
+# Launch interactive dashboard in replay mode from recorded trace:
+fp dashboard --replay sample_run.candump
+```
+
+- **System Header:** Shows live version, safety tier status, Zero-TX verification, bus lock state, discovered register counts, active CAN nodes, and periodic broadcast loops.
+- **Tab 1 — Register Catalog:** Real-time table of discovered field entities across all supported serial protocols:
+  - **Modbus RTU:** Function codes, slave addresses, holding registers, polling frequency (Hz), jitter (ms), and inferred types.
+  - **BACnet MS/TP:** Source address, destination address, and frame types (Token, Poll For Master, Data).
+  - **DNP3:** Master/Outstation addresses, function codes, and object counts.
+  - **Unknown / Proprietary Serial:** Hypothesized frame structures from `UnknownFramer` labeled `UnknownProto` with field offsets, lengths, and confidence scores.
+- **Tab 2 — CAN Sniffer:** CAN bus monitor with bitwise XOR mutation tracking (`cansniffer` algorithm), DLC, payload, and periodic broadcast frequency detection.
+- **Tab 3 — Compliance Audit:** Bus health score meter, total analyzed frames, CRC errors, protocol violations, and detailed diagnostic findings with physical wiring hints. Live event ingestion continuously recalculates bus health.
+- **Tab 4 — Differential Capture:** Physical event correlation engine. Press `[d]` to snapshot baseline; toggle a switch or sensor on the field bus, then press `[d]` to stop and isolate exact bit mutations.
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|---|---|
+| `[Tab]` / `[Right]` | Cycle forward to next view tab |
+| `[BackTab]` / `[Left]` | Cycle backward to previous view tab |
+| `[1]` .. `[4]` | Jump directly to View 1, 2, 3, or 4 |
+| `[d]` / `[D]` | Toggle Physical Event Differential Capture |
+| `[c]` / `[C]` | Reset / Clear Baseline Diff History |
+| `[q]` / `[Esc]` | Exit Dashboard and restore terminal |

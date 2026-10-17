@@ -1,6 +1,6 @@
 # 07. Model Context Protocol Tools (fp-mcp)
 
-> **Topic:** The 8 core Model Context Protocol diagnostic tools for AI agents.
+> **Topic:** The 9 core Model Context Protocol diagnostic and export tools for AI agents.
 
 ---
 
@@ -8,7 +8,7 @@
 
 The `fp-mcp` crate implements the Model Context Protocol (MCP) server.  
 Autonomous AI agents (Claude, Cursor, Codex) connect to `field-probe` over stdio or SSE.  
-Agents use tools to inspect hardware, identify buses, and audit network health.
+Agents use tools to inspect hardware, identify buses, audit network health, and export SCADA configurations.
 
 ---
 
@@ -20,7 +20,7 @@ The diagram below shows an agent discovering an unknown bus:
 
 ---
 
-## 3. The 8 Core Diagnostic Tools
+## 3. The 9 Core Diagnostic Tools
 
 | Tool Name | Operation | Safety Tier |
 |---|---|---|
@@ -31,25 +31,43 @@ The diagram below shows an agent discovering an unknown bus:
 | `run_compliance_audit` | Audit captured frames against official timing standards | Tier 0 |
 | `correlate_physical_change` | Isolate registers mutated during an operator physical action | Tier 0 |
 | `load_security_key` | Register symmetric keys or certificates into KeyRing | Tier 0 |
-| `request_active_probe` | Transmit safe read query on an idle bus | Tier 1 (Permit Required) |
+| `request_active_probe` | Transmit safe read query on an idle bus (requires cryptographic permit and HMAC signature when operator key is loaded) | Tier 1 (Permit Required) |
+| `export_bus_artifacts` | Export register catalog into Vector DBC, PCAP-NG, Telegraf, Node-RED, or JSON | Tier 0 |
 
 ---
 
-## 4. Input Schemas
+## 4. Security & Cryptographic Enforcement
+
+1. **Shared KeyRing:**  
+   The MCP server shares its internal `KeyRing` handle directly with `InferenceEngine`.  
+   When an AI agent registers a secret key via `load_security_key`, the inference engine immediately uses that key to decrypt high-entropy Modbus payloads and unpack engineering registers.
+
+2. **Active Probe Signature Verification:**  
+   When an operator secret key (`KeyType::OperatorSecret`) exists in `KeyRing`, `request_active_probe` mandates an HMAC cryptographic signature in the request parameters.  
+   Requests lacking a valid signature fail immediately with a safety invariant violation.
+
+---
+
+## 5. Input Schemas
 
 Each tool provides a strict JSON Schema:
 
 ```json
 {
-  "name": "auto_detect_bus",
-  "description": "Run passive Tier-0 baud rate, parity, and protocol identification on a dongle.",
+  "name": "export_bus_artifacts",
+  "description": "Export the discovered register catalog and CAN signals into Vector DBC, Wireshark PCAP-NG, Telegraf Influx line protocol, Node-RED flow, or JSON.",
   "parameters": {
     "type": "object",
     "properties": {
       "interface_id": { "type": "string" },
-      "dwell_ms": { "type": "number", "default": 1500 }
+      "format": {
+        "type": "string",
+        "enum": ["dbc", "pcapng", "telegraf", "json", "nodered"],
+        "description": "Target export format"
+      }
     },
-    "required": ["interface_id"]
+    "required": ["format"]
   }
 }
 ```
+

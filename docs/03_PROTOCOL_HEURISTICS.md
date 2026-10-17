@@ -37,19 +37,54 @@ $$\text{Character Time} = \frac{11}{\text{Baud Rate}}$$
 
 ## 2. Checksum and CRC Algorithms
 
-### 2.1 Modbus RTU CRC-16
-- **Polynomial:** $X^{16} + X^{15} + X^2 + 1$ (`0x8005`), reflected to `0xA001`.
-- **Initial Value:** `0xFFFF`.
-- **Order:** Low byte transmitted first, then high byte.
+The engine verifies frame integrity with an 8-algorithm sliding probe.
 
-### 2.2 Modbus ASCII LRC
-- **Algorithm:** Sum all data bytes modulo 256. Compute two's complement `(!sum) + 1`.
+![Sliding Window CRC Scanner](./assets/crc_scanner.svg)
+
+### 2.1 Additive Sum-8 Modulo 256
+- **Algorithm:** Sum all payload bytes modulo 256: `sum(bytes) & 0xFF`.
+- **Application:** Basic industrial telemetry sensors and proprietary RS-485 serial controllers.
+- **Trailer Width:** 1 byte.
+
+### 2.2 Modbus ASCII LRC / Two's Complement-8
+- **Algorithm:** Sum all payload bytes modulo 256. Compute the two's complement: `((!sum) + 1) & 0xFF`.
 - **Framing:** Frame starts with `:` (`0x3A`) and ends with `\r\n` (`0x0D 0x0A`).
+- **Trailer Width:** 1 byte (or 2 ASCII hex characters).
 
-### 2.3 BACnet MS/TP Header CRC-8
+### 2.3 XOR-8 Longitudinal Redundancy Check (LRC)
+- **Algorithm:** Bitwise XOR accumulator over all payload bytes: `xor_acc ^= byte`.
+- **Application:** Legacy automation buses, bar-code readers, and NMEA-0183 serial streams.
+- **Trailer Width:** 1 byte.
+
+### 2.4 BACnet MS/TP Header CRC-8
 - **Polynomial:** $X^8 + X^7 + X^4 + X^3 + X + 1$ (`0x11D`), reflected: `0x8C`.
 - **Initial Value:** `0xFF`. Invert at completion (`!crc`).
 - **Preamble:** Preamble bytes are `0x55 0xFF`.
+- **Trailer Width:** 1 byte.
+
+### 2.5 Modbus RTU CRC-16
+- **Polynomial:** $X^{16} + X^{15} + X^2 + 1$ (`0x8005`), reflected to `0xA001`.
+- **Initial Value:** `0xFFFF`.
+- **Byte Order:** Little-Endian (low byte transmitted first, then high byte).
+- **Trailer Width:** 2 bytes.
+
+### 2.6 DNP3 Data Link CRC-16 (IEEE 1815)
+- **Polynomial:** Reflected polynomial `0xA6BC` (normal `0x3D65`).
+- **Initial Value:** `0x0000`. Invert at completion (`!crc`).
+- **Byte Order:** Little-Endian (low byte first).
+- **Trailer Width:** 2 bytes (appended after header and after every 16 bytes of payload).
+
+### 2.7 CRC-16-CCITT Big-Endian
+- **Polynomial:** $X^{16} + X^{12} + X^5 + 1$ (`0x1021`).
+- **Initial Value:** `0xFFFF`.
+- **Byte Order:** Big-Endian (high byte transmitted first).
+- **Trailer Width:** 2 bytes.
+
+### 2.8 CRC-16-CCITT Little-Endian (Kermit / X.25)
+- **Polynomial:** Reflected polynomial `0x8408`.
+- **Initial Value:** `0xFFFF`.
+- **Byte Order:** Little-Endian (low byte transmitted first).
+- **Trailer Width:** 2 bytes.
 
 ---
 
@@ -104,3 +139,41 @@ Audit serial line timing and inter-frame intervals directly from the command lin
 ```bash
 cargo run -p fp-cli -- audit
 ```
+
+### 5.3 PCAP-NG Multi-Interface LinkType Demultiplexing
+PCAP-NG captures can record different industrial networks in one trace file.  
+The replay engine parses Interface Description Blocks (IDBs) to map interfaces to exact protocols:
+- **LinkType 227 (`LINKTYPE_CAN_SOCKETCAN`):** Handled as Linux SocketCAN frames with standard or extended CAN IDs, DLC, and payload.
+- **LinkType 147 (`LINKTYPE_USER0`), 250 (`LINKTYPE_RTAC_SERIAL`), 274 (`LINKTYPE_MODBUS`):** Handled as serial byte chunks with microsecond inter-arrival timestamps.
+
+This interface tracking prevents serial payloads from being misparsed as 8-byte CAN frames.
+
+---
+
+## 6. Unknown Protocol Sequence Framer (Netzob Heuristics)
+
+When proprietary or uncataloged serial protocols operate on the bus, `fp-autodetect::UnknownFramer` applies sequence alignment and statistical column entropy analysis:
+
+### 6.1 Silence-Delimited Clustering (`cluster_by_silence`)
+
+Partitions timestamped raw byte slices into distinct frame candidates.  
+When the time delta between two consecutive byte chunks exceeds the configured threshold ($t_{\text{silence}}$, e.g. 3.5 character times or custom interval), the framer demarcates a packet boundary.
+
+### 6.2 Statistical Matrix Variance Analysis (`analyze_frame_matrix`)
+
+The engine aligns detected frames into a two-dimensional byte matrix and computes statistical variance for each byte column position ($k$):
+
+$$\text{Variance}_k = \frac{1}{N} \sum_{i=1}^{N} \left(\frac{\text{Byte}_{i,k}}{255.0} - \mu_k\right)^2$$
+
+Columns are classified into distinct structural categories:
+- **Static / Constant Columns ($\text{Variance} = 0.0$):**  
+  Identifies unchanging bytes. These represent candidate protocol preambles, sync words (e.g., `0x55 0xFF`), or fixed operation codes.
+- **Low Variance Columns ($0.0 < \text{Variance} < 0.15$):**  
+  Identifies incrementally changing bytes. These represent candidate packet sequence counters, rolling transaction IDs, or node addresses.
+- **Dynamic Payload Columns ($\text{Variance} \ge 0.15$):**  
+  Identifies high-entropy bytes. These represent analog sensor measurements, variable payloads, or cryptographic/CRC checksums.
+
+### 6.3 Raw Contiguous Stream Inference (`infer_from_raw_stream`)
+
+When hardware timestamp markers are unavailable, `infer_from_raw_stream` searches a contiguous byte buffer for repeating delimiters (e.g. `\r\n`, `0x7E`, `0x55`) or repeating fixed-length stride patterns to hypothesize frame boundaries.
+

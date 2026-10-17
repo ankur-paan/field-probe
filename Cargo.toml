@@ -56,3 +56,7 @@ nom = "7.1"
 
 # Testing & verification
 proptest = "1.4"
+
+# Terminal User Interface
+ratatui = "0.28"
+crossterm = "0.28"

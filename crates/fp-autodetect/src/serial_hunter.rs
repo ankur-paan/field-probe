@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::crc::{
-    bacnet_crc8, modbus_ascii_lrc, verify_dnp3_crc16, verify_modbus_rtu_crc16,
-};
+use crate::crc::{bacnet_crc8, modbus_ascii_lrc, verify_dnp3_crc16, verify_modbus_rtu_crc16};
 
 /// Candidate serial protocol detected on the bus
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -15,38 +13,9 @@ pub enum SerialProtocolCandidate {
 }
 
 /// Standard baud rates evaluated during auto-detection scan
-pub const CANDIDATE_BAUD_RATES: [u32; 8] = [
-    9600, 19200, 38400, 57600, 115200, 230400, 4800, 2400,
-];
+pub const CANDIDATE_BAUD_RATES: [u32; 8] = [9600, 19200, 38400, 57600, 115200, 230400, 4800, 2400];
 
-/// Serial timing tolerances (t1.5 and t3.5) in microseconds
-/// (Timing parameters based on Modbus standard specifications and field serial analysis)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SerialSilenceIntervals {
-    /// Inter-character timeout t1.5 in microseconds
-    pub t1_5_us: u64,
-    /// Inter-frame silence t3.5 in microseconds
-    pub t3_5_us: u64,
-}
-
-/// Calculate exact t1.5 and t3.5 silence intervals for a given baud rate.
-/// For baud rates > 19200 bps, uses fixed standard constants (750 us and 1750 us).
-pub fn calculate_silence_intervals(baud_rate: u32) -> SerialSilenceIntervals {
-    if baud_rate > 19200 {
-        SerialSilenceIntervals {
-            t1_5_us: 750,
-            t3_5_us: 1750,
-        }
-    } else {
-        let char_time_us = 11_000_000.0 / (baud_rate as f64);
-        let t1_5 = (1.5 * char_time_us).round() as u64;
-        let t3_5 = (3.5 * char_time_us).round() as u64;
-        SerialSilenceIntervals {
-            t1_5_us: t1_5,
-            t3_5_us: t3_5,
-        }
-    }
-}
+pub use fp_core::params::{calculate_silence_intervals, SerialSilenceIntervals};
 
 /// Result of auto-detecting a serial bus stream
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -56,6 +25,7 @@ pub struct SerialDetectionScore {
     pub confidence: f32,
     pub valid_crc_count: usize,
     pub total_frames_scanned: usize,
+    pub unknown_hypothesis: Option<crate::unknown_framer::FrameStructureHypothesis>,
 }
 
 /// Sliding window CRC-16 scanner across raw byte buffers with byte-level resynchronization
@@ -222,31 +192,48 @@ pub fn scan_dnp3_frames(buffer: &[u8]) -> Vec<(usize, usize)> {
 /// Score a raw serial buffer against candidate protocols
 pub fn score_serial_stream(buffer: &[u8], baud_rate: u32) -> SerialDetectionScore {
     let rtu_matches = scan_modbus_rtu_frames(buffer);
+    let ascii_matches = scan_modbus_ascii_frames(buffer);
     let mstp_matches = scan_bacnet_mstp_frames(buffer);
     let dnp3_matches = scan_dnp3_frames(buffer);
 
-    let (proto, count) = if rtu_matches.len() >= mstp_matches.len() && rtu_matches.len() >= dnp3_matches.len() && !rtu_matches.is_empty() {
-        (SerialProtocolCandidate::ModbusRtu, rtu_matches.len())
-    } else if mstp_matches.len() > rtu_matches.len() && mstp_matches.len() >= dnp3_matches.len() {
-        (SerialProtocolCandidate::BacnetMstp, mstp_matches.len())
-    } else if dnp3_matches.len() > rtu_matches.len() {
-        (SerialProtocolCandidate::Dnp3, dnp3_matches.len())
-    } else {
-        (SerialProtocolCandidate::Unknown, 0)
-    };
+    let candidates = [
+        (SerialProtocolCandidate::ModbusRtu, rtu_matches.len()),
+        (SerialProtocolCandidate::ModbusAscii, ascii_matches.len()),
+        (SerialProtocolCandidate::BacnetMstp, mstp_matches.len()),
+        (SerialProtocolCandidate::Dnp3, dnp3_matches.len()),
+    ];
 
-    let confidence = if count > 0 {
-        (count as f32 * 0.35).min(1.0)
+    let mut best_proto = SerialProtocolCandidate::Unknown;
+    let mut best_count = 0;
+
+    for (proto, count) in candidates {
+        if count > best_count {
+            best_count = count;
+            best_proto = proto;
+        }
+    }
+
+    let (confidence, unknown_hypothesis) = if best_count > 0 {
+        ((best_count as f32 * 0.35).min(1.0), None)
     } else {
-        0.0
+        let framer = crate::unknown_framer::UnknownFramer::new();
+        if let Some(hyp) = framer.infer_from_raw_stream(buffer) {
+            (hyp.confidence, Some(hyp))
+        } else {
+            (0.0, None)
+        }
     };
 
     SerialDetectionScore {
-        candidate_protocol: proto,
+        candidate_protocol: best_proto,
         baud_rate,
         confidence,
-        valid_crc_count: count,
-        total_frames_scanned: rtu_matches.len() + mstp_matches.len() + dnp3_matches.len(),
+        valid_crc_count: best_count,
+        total_frames_scanned: rtu_matches.len()
+            + ascii_matches.len()
+            + mstp_matches.len()
+            + dnp3_matches.len(),
+        unknown_hypothesis,
     }
 }
 
@@ -327,13 +314,53 @@ mod tests {
     #[test]
     fn test_score_serial_stream() {
         let stream = vec![
-            0x01, 0x03, 0x00, 0x00, 0x00, 0x01, 0x84, 0x0A,
-            0x01, 0x03, 0x02, 0x00, 0x64, 0xB9, 0xAF,
+            0x01, 0x03, 0x00, 0x00, 0x00, 0x01, 0x84, 0x0A, 0x01, 0x03, 0x02, 0x00, 0x64, 0xB9,
+            0xAF,
         ];
         let score = score_serial_stream(&stream, 9600);
         assert_eq!(score.candidate_protocol, SerialProtocolCandidate::ModbusRtu);
         assert_eq!(score.valid_crc_count, 2);
         assert!(score.confidence > 0.5);
+    }
+
+    #[test]
+    fn test_score_serial_stream_modbus_ascii() {
+        let stream = b"NOISE:010300000001FB\r\nTRAILING";
+        let score = score_serial_stream(stream, 19200);
+        assert_eq!(
+            score.candidate_protocol,
+            SerialProtocolCandidate::ModbusAscii
+        );
+        assert_eq!(score.valid_crc_count, 1);
+        assert!(score.confidence > 0.3);
+    }
+
+    #[test]
+    fn test_score_serial_stream_unknown_hypothesis() {
+        // Unknown proprietary protocol stream with repeating 8-byte frames:
+        // [0xAA, 0x55, node, seq, val_hi, val_lo, crc_hi, crc_lo]
+        // using CCITT CRC-16 (0x1021)
+        let mut stream = Vec::new();
+        for i in 0..6u8 {
+            let node = if i % 2 == 0 { 0x01 } else { 0x02 };
+            let val = (500 + (i as u16) * 10).to_be_bytes();
+            let mut frame = vec![0xAA, 0x55, node, i, val[0], val[1]];
+            let crc = crate::unknown_framer::compute_crc16_ccitt(&frame);
+            frame.extend_from_slice(&crc.to_be_bytes());
+            stream.extend_from_slice(&frame);
+        }
+
+        let score = score_serial_stream(&stream, 115200);
+        assert_eq!(score.candidate_protocol, SerialProtocolCandidate::Unknown);
+        assert!(score.unknown_hypothesis.is_some());
+        let hyp = score.unknown_hypothesis.unwrap();
+        assert_eq!(hyp.frame_length, 8);
+        assert_eq!(hyp.sample_preamble, vec![0xAA, 0x55]);
+        assert_eq!(
+            hyp.detected_crc_type,
+            Some("CRC-16/CCITT (0x1021)".to_string())
+        );
+        assert!(score.confidence > 0.7);
     }
 
     // Property-based fuzz test: random byte slices of any length up to 1024 bytes MUST NEVER PANIC

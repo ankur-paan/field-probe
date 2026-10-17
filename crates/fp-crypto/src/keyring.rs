@@ -10,6 +10,7 @@ pub enum KeyType {
     TlsCertificate,
     XorMask,
     CustomSeed,
+    OperatorSecret,
 }
 
 /// A stored encryption key or certificate with metadata
@@ -69,19 +70,95 @@ impl KeyRing {
     pub fn list_keys(&self) -> Vec<String> {
         self.keys.read().unwrap().keys().cloned().collect()
     }
+
+    /// Sign a safety permit using a designated key in the keyring
+    pub fn sign_permit(&self, key_id: &str, permit: &mut fp_core::SafetyPermit) -> bool {
+        let key = match self.get_key(key_id) {
+            Some(k) => k,
+            None => return false,
+        };
+        let canonical = permit.canonical_bytes();
+        let mac = crate::hmac::hmac_sha256(&key.secret_bytes, &canonical);
+        permit.signature = Some(crate::hmac::to_hex(&mac));
+        true
+    }
+
+    /// Cryptographically verify a safety permit against operator secrets in the keyring
+    pub fn verify_permit(&self, permit: &fp_core::SafetyPermit) -> bool {
+        let sig = match &permit.signature {
+            Some(s) => s,
+            None => return false,
+        };
+        let canonical = permit.canonical_bytes();
+
+        let guard = self.keys.read().unwrap();
+        // Check all OperatorSecret keys or keys matching authorized_caller
+        for key in guard.values() {
+            if (key.key_type == KeyType::OperatorSecret
+                || key.key_id == permit.authorized_caller
+                || key.target_scope == "operator")
+                && crate::hmac::verify_hmac_sha256(&key.secret_bytes, &canonical, sig)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check whether the keyring contains any OperatorSecret keys or operator-scoped keys
+    pub fn has_operator_keys(&self) -> bool {
+        let guard = self.keys.read().unwrap();
+        guard
+            .values()
+            .any(|k| k.key_type == KeyType::OperatorSecret || k.target_scope == "operator")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fp_core::chrono::{Duration, Utc};
+    use fp_core::{SafetyPermit, SafetyTier};
 
     #[test]
     fn test_keyring_storage_and_retrieval() {
         let keyring = KeyRing::new();
         keyring.insert_symmetric_key("test-key", &[1, 2, 3, 4]);
 
-        assert_eq!(keyring.get_symmetric_key("test-key"), Some(vec![1, 2, 3, 4]));
+        assert_eq!(
+            keyring.get_symmetric_key("test-key"),
+            Some(vec![1, 2, 3, 4])
+        );
         assert_eq!(keyring.get_symmetric_key("missing"), None);
     }
-}
 
+    #[test]
+    fn test_safety_permit_signing_and_verification() {
+        let keyring = KeyRing::new();
+        let secret = b"super-secret-operator-key-32bytes!";
+        keyring.insert_key(ManagedKey {
+            key_id: "op-key-1".to_string(),
+            key_type: KeyType::OperatorSecret,
+            target_scope: "operator".to_string(),
+            secret_bytes: secret.to_vec(),
+        });
+
+        let mut permit = SafetyPermit::new(
+            "permit-123",
+            SafetyTier::ReadOnlyProbe,
+            "field-engineer",
+            Utc::now() + Duration::hours(1),
+            Some("CAN:0x7E0".to_string()),
+        );
+
+        assert!(!keyring.verify_permit(&permit)); // No signature yet
+
+        assert!(keyring.sign_permit("op-key-1", &mut permit));
+        assert!(permit.signature.is_some());
+        assert!(keyring.verify_permit(&permit));
+
+        // Tampering with scope breaks signature
+        permit.scope = Some("CAN:0x7E1".to_string());
+        assert!(!keyring.verify_permit(&permit));
+    }
+}

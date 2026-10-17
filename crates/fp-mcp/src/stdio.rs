@@ -62,7 +62,11 @@ mod tests {
 
         // Client reads response
         let mut client_lines = tokio::io::BufReader::new(client_read).lines();
-        let resp_line = client_lines.next_line().await.unwrap().expect("Response line");
+        let resp_line = client_lines
+            .next_line()
+            .await
+            .unwrap()
+            .expect("Response line");
 
         let resp: serde_json::Value = serde_json::from_str(&resp_line).expect("Valid JSON");
         assert_eq!(resp["result"]["serverInfo"]["name"], "field-probe-mcp");

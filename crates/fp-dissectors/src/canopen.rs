@@ -98,10 +98,7 @@ pub enum CanOpenPayload {
         data: Vec<u8>,
     },
     /// Raw unparsed CANopen frame
-    Raw {
-        cob_id: u16,
-        data: Vec<u8>,
-    },
+    Raw { cob_id: u16, data: Vec<u8> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -264,10 +261,14 @@ mod tests {
     #[test]
     fn test_canopen_heartbeat_dissection() {
         let cob_id = 0x705; // Node 5 Heartbeat
-        let data = [0x05];   // Operational
+        let data = [0x05]; // Operational
         let msg = dissect_canopen(cob_id, &data).expect("Heartbeat message");
         match msg.payload {
-            CanOpenPayload::Heartbeat { node_id, state, state_name } => {
+            CanOpenPayload::Heartbeat {
+                node_id,
+                state,
+                state_name,
+            } => {
                 assert_eq!(node_id, 5);
                 assert_eq!(state, CanOpenNmtState::Operational);
                 assert_eq!(state_name, "Operational");
@@ -282,7 +283,9 @@ mod tests {
         let data = [0x01, 0x00]; // Start all nodes
         let msg = dissect_canopen(cob_id, &data).expect("NMT Command");
         match msg.payload {
-            CanOpenPayload::NmtCommand { cs, target_node_id, .. } => {
+            CanOpenPayload::NmtCommand {
+                cs, target_node_id, ..
+            } => {
                 assert_eq!(cs, 0x01);
                 assert_eq!(target_node_id, 0);
             }
@@ -293,7 +296,7 @@ mod tests {
     #[test]
     fn test_canopen_sdo_upload() {
         let cob_id = 0x582; // Transmit SDO from Node 2
-        // CS: 0x4B (Upload response, 2 bytes), Index: 0x1018, Sub: 0x01, Data: 0x0403
+                            // CS: 0x4B (Upload response, 2 bytes), Index: 0x1018, Sub: 0x01, Data: 0x0403
         let data = [0x4B, 0x18, 0x10, 0x01, 0x03, 0x04, 0x00, 0x00];
         let msg = dissect_canopen(cob_id, &data).expect("SDO message");
         match msg.payload {
