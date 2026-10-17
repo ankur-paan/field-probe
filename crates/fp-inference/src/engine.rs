@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use fp_core::CanFrame;
 use fp_dissectors::ModbusRtuAdu;
 use serde::{Deserialize, Serialize};
@@ -6,7 +8,7 @@ use crate::{
     bus_load::BusLoadEstimator,
     catalog::{InferredRegisterEntry, RegisterCatalog},
     diff_capture::{DiffCaptureReport, DiffCaptureSession},
-    histogram::TimingHistogramEngine,
+    histogram::{TimingHistogramEngine, WelfordTracker},
     pairing::{MatchedTransaction, TransactionMatcher},
     plausibility::PlausibilityScorer,
     sniffer::{BitDeltaReport, CanSnifferEngine},
@@ -31,6 +33,7 @@ pub struct InferenceEngine {
     pub histogram_engine: TimingHistogramEngine,
     pub bus_load_estimator: BusLoadEstimator,
     pub diff_session: DiffCaptureSession,
+    pub modbus_timing_trackers: HashMap<(u8, u16), WelfordTracker>,
 }
 
 impl InferenceEngine {
@@ -43,6 +46,7 @@ impl InferenceEngine {
             histogram_engine: TimingHistogramEngine::new(),
             bus_load_estimator: BusLoadEstimator::new(nominal_can_bitrate, 1000),
             diff_session: DiffCaptureSession::new(),
+            modbus_timing_trackers: HashMap::new(),
         }
     }
 
@@ -54,14 +58,22 @@ impl InferenceEngine {
     ) -> Option<MatchedTransaction> {
         let matched = self.transaction_matcher.ingest_modbus_frame(adu, timestamp_us)?;
 
+        // Update Welford timing tracker per (slave_id, start_address)
+        let timing_tracker = self
+            .modbus_timing_trackers
+            .entry((matched.slave_id, matched.start_address))
+            .or_default();
+        timing_tracker.update(timestamp_us);
+        let (polling_frequency_hz, jitter_ms) = timing_tracker.rate_and_jitter();
+
         // Update register values, catalog, and plausibility
         let node_str = format!("Slave_{}", matched.slave_id);
 
-        for (addr, val) in &matched.register_values {
-            // Record in diff capture session if active
-            self.diff_session.record_register(matched.slave_id, *addr, *val, timestamp_us);
+        let mut i = 0;
+        while i < matched.register_values.len() {
+            let (addr, val) = matched.register_values[i];
+            self.diff_session.record_register(matched.slave_id, addr, val, timestamp_us);
 
-            // Check if adjacent register exists for 32-bit Float/Int evaluation
             let next_addr = addr.wrapping_add(1);
             let next_val = matched
                 .register_values
@@ -69,11 +81,15 @@ impl InferenceEngine {
                 .find(|(a, _)| *a == next_addr)
                 .map(|(_, v)| *v);
 
+            let mut is_32bit_float = false;
             let (plausible_type, confidence) = if let Some(r1) = next_val {
                 let candidates = self
                     .plausibility_scorer
-                    .evaluate_pair(&node_str, *addr as u32, *val, r1);
+                    .evaluate_pair(&node_str, addr as u32, val, r1);
                 if let Some(top) = candidates.first() {
+                    if top.representation_name.starts_with("Float32") && top.confidence >= 0.70 {
+                        is_32bit_float = true;
+                    }
                     (top.representation_name.clone(), top.confidence)
                 } else {
                     ("UInt16".to_string(), 0.50)
@@ -82,15 +98,32 @@ impl InferenceEngine {
                 ("UInt16".to_string(), 0.60)
             };
 
-            self.catalog.insert_or_update(InferredRegisterEntry {
-                node_or_slave: node_str.clone(),
-                address: *addr as u32,
-                polling_frequency_hz: 1.0, // default until multi-sample rate computed
-                jitter_ms: 0.0,
-                raw_hex: format!("0x{:04X}", val),
-                plausible_type,
-                confidence,
-            });
+            if is_32bit_float {
+                let r1 = next_val.unwrap();
+                self.diff_session.record_register(matched.slave_id, next_addr, r1, timestamp_us);
+
+                self.catalog.insert_or_update(InferredRegisterEntry {
+                    node_or_slave: node_str.clone(),
+                    address: addr as u32,
+                    polling_frequency_hz: polling_frequency_hz as f32,
+                    jitter_ms: jitter_ms as f32,
+                    raw_hex: format!("0x{:04X}{:04X}", val, r1),
+                    plausible_type,
+                    confidence,
+                });
+                i += 2;
+            } else {
+                self.catalog.insert_or_update(InferredRegisterEntry {
+                    node_or_slave: node_str.clone(),
+                    address: addr as u32,
+                    polling_frequency_hz: polling_frequency_hz as f32,
+                    jitter_ms: jitter_ms as f32,
+                    raw_hex: format!("0x{:04X}", val),
+                    plausible_type,
+                    confidence,
+                });
+                i += 1;
+            }
         }
 
         Some(matched)
@@ -170,11 +203,39 @@ mod tests {
         assert_eq!(matched.latency_us, 15_000);
 
         let summary = engine.get_summary();
-        assert_eq!(summary.total_discovered_registers, 2);
+        // Register pair (40001 + 40002) is cataloged as a single Float32 entry, skipping spurious UInt16 for r1
+        assert_eq!(summary.total_discovered_registers, 1);
 
         let entry = engine.catalog.entries.get("Slave_1:40001").expect("Catalog entry");
         assert!(entry.plausible_type.contains("Float32 (CDAB"));
         assert!(entry.confidence >= 0.70);
+        assert_eq!(entry.raw_hex, "0x999A41BB");
+
+        // 3. Follow-up query after 100ms (10 Hz nominal rate)
+        let query2 = ModbusRtuAdu {
+            slave_id: 1,
+            pdu: ModbusPdu::ReadHoldingRegistersQuery {
+                start_addr: 40001,
+                quantity: 2,
+            },
+            crc16: 0,
+        };
+        assert_eq!(engine.ingest_modbus_frame(&query2, 1_100_000), None);
+
+        let resp2 = ModbusRtuAdu {
+            slave_id: 1,
+            pdu: ModbusPdu::ReadResponse {
+                function_code: 0x03,
+                byte_count: 4,
+                data: vec![0x99, 0x9A, 0x41, 0xBB],
+            },
+            crc16: 0,
+        };
+        let _ = engine.ingest_modbus_frame(&resp2, 1_115_000).expect("Matched transaction 2");
+
+        let entry2 = engine.catalog.entries.get("Slave_1:40001").expect("Catalog entry");
+        // Interval was 100,000 us (100 ms) -> ~10.0 Hz
+        assert!((entry2.polling_frequency_hz - 10.0).abs() < 0.1);
     }
 
     #[test]

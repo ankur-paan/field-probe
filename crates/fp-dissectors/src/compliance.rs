@@ -1,3 +1,4 @@
+use fp_core::{calculate_silence_intervals, LinkParams, RawBusEvent, RawFrame};
 use serde::{Deserialize, Serialize};
 
 use crate::modbus::{ModbusExceptionCode, ModbusPdu, ModbusRtuAdu};
@@ -165,11 +166,128 @@ impl ComplianceReport {
             _ => {}
         }
     }
+
+    /// Audit physical layer and timing compliance of a raw bus event
+    pub fn audit_raw_event(&mut self, event: &RawBusEvent) {
+        let baud = match &event.link_params {
+            LinkParams::Serial(s) => s.baud_rate,
+            _ => 9600,
+        };
+        self.audit_raw_event_with_baud(event, baud);
+    }
+
+    /// Audit physical layer and timing compliance of a raw bus event with explicit baud rate
+    pub fn audit_raw_event_with_baud(&mut self, event: &RawBusEvent, baud_rate: u32) {
+        self.total_frames_analyzed += 1;
+
+        // 1. CAN physical/protocol error auditing
+        if event.error_flags.can_crc_error {
+            self.crc_error_count += 1;
+            self.add_issue(ComplianceIssue {
+                severity: ViolationSeverity::Critical,
+                rule_id: "CAN-001-CRC-ERROR".into(),
+                description: "CAN hardware CRC checksum error detected on interface".into(),
+                physical_hint: Some("Electrical noise, improper cable termination, or transceiver distortion.".into()),
+            });
+        }
+
+        if event.error_flags.can_stuff_error {
+            self.add_issue(ComplianceIssue {
+                severity: ViolationSeverity::Critical,
+                rule_id: "CAN-002-STUFF-ERROR".into(),
+                description: "CAN bit stuffing rule violation (>5 identical consecutive bits)".into(),
+                physical_hint: Some("Severe clock drift, bus reflection, or faulty physical transceiver.".into()),
+            });
+        }
+
+        if event.error_flags.can_form_error || event.error_flags.can_bit_error {
+            self.add_issue(ComplianceIssue {
+                severity: ViolationSeverity::Warning,
+                rule_id: "CAN-003-PHYSICAL-ERROR".into(),
+                description: "CAN framing or bit monitoring error on transmission/reception".into(),
+                physical_hint: Some("Differential signal integrity degraded or bus contention.".into()),
+            });
+        }
+
+        if event.error_flags.can_ack_error {
+            self.add_issue(ComplianceIssue {
+                severity: ViolationSeverity::Warning,
+                rule_id: "CAN-004-ACK-DELIMITER".into(),
+                description: "CAN frame unacknowledged by any node on the bus".into(),
+                physical_hint: Some("Isolated node, disconnected termination, or baud rate mismatch.".into()),
+            });
+        }
+
+        if let RawFrame::Can(can_frame) = &event.payload {
+            if can_frame.is_error {
+                self.add_issue(ComplianceIssue {
+                    severity: ViolationSeverity::Critical,
+                    rule_id: "CAN-005-ERROR-FRAME".into(),
+                    description: "Active/passive error frame received from CAN controller".into(),
+                    physical_hint: Some("Node entered Error-Passive or Bus-Off state due to repeated faults.".into()),
+                });
+            }
+        }
+
+        // 2. Serial / UART physical error auditing
+        if event.error_flags.uart_framing_error {
+            self.timing_violation_count += 1;
+            self.add_issue(ComplianceIssue {
+                severity: ViolationSeverity::Critical,
+                rule_id: "UART-001-FRAMING-ERROR".into(),
+                description: "UART stop bit framing error detected".into(),
+                physical_hint: Some("Baud rate mismatch or severe RS-485 slew rate / line capacitance distortion.".into()),
+            });
+        }
+
+        if event.error_flags.uart_parity_error {
+            self.crc_error_count += 1;
+            self.add_issue(ComplianceIssue {
+                severity: ViolationSeverity::Critical,
+                rule_id: "UART-002-PARITY-ERROR".into(),
+                description: "UART parity check failed on received byte".into(),
+                physical_hint: Some("Parity configuration (None/Even/Odd) mismatch or single-bit noise spike.".into()),
+            });
+        }
+
+        if event.error_flags.uart_overrun_error {
+            self.add_issue(ComplianceIssue {
+                severity: ViolationSeverity::Warning,
+                rule_id: "UART-003-OVERRUN-ERROR".into(),
+                description: "UART hardware FIFO overrun; byte dropped by receiver".into(),
+                physical_hint: Some("Driver latency or interrupt starvation; reduce baud rate or optimize reader buffer.".into()),
+            });
+        }
+
+        // 3. Serial inter-frame and inter-character timing verification (t1.5 and t3.5)
+        if let RawFrame::Serial(chunk) = &event.payload {
+            if let Some(gap_us) = chunk.inter_frame_gap_us {
+                let silence = calculate_silence_intervals(baud_rate);
+
+                // Modbus RTU timing rule: inter-character delay must not exceed t1.5.
+                // A gap between t1.5 and t3.5 causes a receiver framing error because
+                // the frame is discarded as incomplete without establishing the 3.5-char delimiter.
+                if gap_us > silence.t1_5_us && gap_us < silence.t3_5_us {
+                    self.timing_violation_count += 1;
+                    self.add_issue(ComplianceIssue {
+                        severity: ViolationSeverity::Warning,
+                        rule_id: "MODBUS-004-TIMING-T1_5-VIOLATION".into(),
+                        description: format!(
+                            "Inter-character gap ({} us) exceeded t1.5 tolerance ({} us) without reaching t3.5 frame boundary ({} us)",
+                            gap_us, silence.t1_5_us, silence.t3_5_us
+                        ),
+                        physical_hint: Some("Serial transmitter paused mid-frame or buffering delay on repeater/gateway.".into()),
+                    });
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fp_core::{BusErrorFlags, CanFrame, SerialParams, TimestampedChunk};
 
     #[test]
     fn test_modbus_register_overflow_compliance() {
@@ -206,5 +324,54 @@ mod tests {
         report.audit_modbus_adu(&adu);
         assert_eq!(report.issues.len(), 1);
         assert_eq!(report.issues[0].severity, ViolationSeverity::Critical);
+    }
+
+    #[test]
+    fn test_compliance_audit_raw_event_timing_violation() {
+        let mut report = ComplianceReport::new();
+
+        // 9600 baud: char time ~1146 us -> t1.5 ~1719 us, t3.5 ~4010 us
+        let chunk = TimestampedChunk::new(vec![0x01, 0x03, 0x00], Some(2500));
+        let event = RawBusEvent::new_serial_rx(
+            "ttyUSB0",
+            1_000_000,
+            LinkParams::Serial(SerialParams {
+                baud_rate: 9600,
+                ..Default::default()
+            }),
+            chunk,
+        );
+
+        report.audit_raw_event(&event);
+        assert_eq!(report.total_frames_analyzed, 1);
+        assert_eq!(report.timing_violation_count, 1);
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues[0].rule_id, "MODBUS-004-TIMING-T1_5-VIOLATION");
+        assert!(report.link_health_score < 1.0);
+    }
+
+    #[test]
+    fn test_compliance_audit_raw_event_can_crc_and_error_flags() {
+        let mut report = ComplianceReport::new();
+
+        let mut error_frame = CanFrame::new_standard(0x000, &[]);
+        error_frame.is_error = true;
+
+        let mut event = RawBusEvent::new_can_rx(
+            "can0",
+            1_000_000,
+            LinkParams::default(),
+            error_frame,
+        );
+        event.error_flags = BusErrorFlags {
+            can_crc_error: true,
+            ..Default::default()
+        };
+
+        report.audit_raw_event(&event);
+        assert_eq!(report.total_frames_analyzed, 1);
+        assert_eq!(report.crc_error_count, 1);
+        assert_eq!(report.protocol_violation_count, 2); // 1 for CRC critical + 1 for CAN error frame critical
+        assert_eq!(report.issues.len(), 2);
     }
 }

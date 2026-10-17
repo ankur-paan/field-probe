@@ -109,3 +109,28 @@ pub enum BusProtocol {
     Unknown,
 }
 
+/// Calculated t1.5 and t3.5 character silence intervals in microseconds for serial bus timing
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SerialSilenceIntervals {
+    pub t1_5_us: u64,
+    pub t3_5_us: u64,
+}
+
+/// Calculate exact t1.5 and t3.5 silence intervals for a given baud rate according to Modbus/serial specifications.
+/// For baud rates > 19200 bps, uses fixed standard constants (750 us and 1750 us).
+pub fn calculate_silence_intervals(baud_rate: u32) -> SerialSilenceIntervals {
+    if baud_rate > 19200 {
+        SerialSilenceIntervals {
+            t1_5_us: 750,
+            t3_5_us: 1750,
+        }
+    } else {
+        let char_time_us = 11_000_000.0 / (baud_rate.max(1) as f64);
+        let t1_5 = (1.5 * char_time_us).round() as u64;
+        let t3_5 = (3.5 * char_time_us).round() as u64;
+        SerialSilenceIntervals {
+            t1_5_us: t1_5,
+            t3_5_us: t3_5,
+        }
+    }
+}

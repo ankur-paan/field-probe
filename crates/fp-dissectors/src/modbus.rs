@@ -213,7 +213,20 @@ fn parse_pdu(input: &[u8]) -> IResult<&[u8], ModbusPdu> {
         // Query has 4 bytes (start_addr: u16, quantity: u16)
         // Response has byte_count: u8 followed by data
         0x01 => {
-            if input.len() == 4 {
+            // A ReadCoils response has byte_count as first byte.
+            // If input.len() == 4 and input[0] == 3, it is a 3-byte coil response ([0x03, b0, b1, b2]).
+            if input.len() == 4 && input[0] == 3 {
+                let (input, byte_count) = be_u8(input)?;
+                let (input, data) = take(byte_count as usize)(input)?;
+                Ok((
+                    input,
+                    ModbusPdu::ReadResponse {
+                        function_code: fc,
+                        byte_count,
+                        data: data.to_vec(),
+                    },
+                ))
+            } else if input.len() == 4 {
                 let (input, start_addr) = be_u16(input)?;
                 let (input, quantity) = be_u16(input)?;
                 Ok((input, ModbusPdu::ReadCoilsQuery { start_addr, quantity }))
@@ -233,7 +246,20 @@ fn parse_pdu(input: &[u8]) -> IResult<&[u8], ModbusPdu> {
             }
         }
         0x02 => {
-            if input.len() == 4 {
+            // A ReadDiscreteInputs response has byte_count as first byte.
+            // If input.len() == 4 and input[0] == 3, it is a 3-byte discrete input response ([0x03, b0, b1, b2]).
+            if input.len() == 4 && input[0] == 3 {
+                let (input, byte_count) = be_u8(input)?;
+                let (input, data) = take(byte_count as usize)(input)?;
+                Ok((
+                    input,
+                    ModbusPdu::ReadResponse {
+                        function_code: fc,
+                        byte_count,
+                        data: data.to_vec(),
+                    },
+                ))
+            } else if input.len() == 4 {
                 let (input, start_addr) = be_u16(input)?;
                 let (input, quantity) = be_u16(input)?;
                 Ok((input, ModbusPdu::ReadDiscreteInputsQuery { start_addr, quantity }))
@@ -547,6 +573,22 @@ mod tests {
             ModbusPdu::ReadHoldingRegistersQuery {
                 start_addr: 0,
                 quantity: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_read_coils_3byte_response_collision() {
+        // FC 0x01, byte count 3, 3 data bytes = 4 bytes input after FC!
+        // ADU: Slave 1, FC 0x01, ByteCount 0x03, Data [0xAA, 0xBB, 0xCC], CRC [0x12, 0x34]
+        let raw = [0x01, 0x01, 0x03, 0xAA, 0xBB, 0xCC, 0x12, 0x34];
+        let adu = parse_modbus_rtu_frame(&raw).expect("Valid ReadCoils response");
+        assert_eq!(
+            adu.pdu,
+            ModbusPdu::ReadResponse {
+                function_code: 0x01,
+                byte_count: 3,
+                data: vec![0xAA, 0xBB, 0xCC],
             }
         );
     }

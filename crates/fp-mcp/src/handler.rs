@@ -1,5 +1,5 @@
 use fp_core::{AdapterCapabilities, BusProtocol, IndustrialChip, SafetyPermit, SafetyTier};
-use fp_crypto::KeyRing;
+use fp_crypto::{KeyRing, KeyType, ManagedKey};
 use fp_dissectors::{ComplianceReport, ModbusRtuAdu};
 use fp_inference::InferenceEngine;
 use serde::{Deserialize, Serialize};
@@ -193,23 +193,53 @@ impl McpServerState {
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::invalid_params("Missing key_id"))?;
         let hex_bytes = args
-            .get("hex_bytes")
+            .get("secret_hex")
+            .or_else(|| args.get("hex_bytes"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| McpError::invalid_params("Missing hex_bytes"))?;
+            .ok_or_else(|| McpError::invalid_params("Missing secret_hex or hex_bytes"))?;
 
-        let bytes = hex_decode(hex_bytes).map_err(|_| McpError::invalid_params("Invalid hex_bytes string"))?;
-        self.keyring.insert_symmetric_key(key_id, &bytes);
+        let key_type_str = args
+            .get("key_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Aes128");
+
+        let key_type = match key_type_str {
+            "Aes128" => KeyType::Aes128,
+            "Aes256" => KeyType::Aes256,
+            "TlsCertificate" => KeyType::TlsCertificate,
+            "XorMask" => KeyType::XorMask,
+            "CustomSeed" => KeyType::CustomSeed,
+            _ => KeyType::Aes128,
+        };
+
+        let target_scope = args
+            .get("target_scope")
+            .and_then(|v| v.as_str())
+            .unwrap_or("global");
+
+        let bytes = hex_decode(hex_bytes).map_err(|_| McpError::invalid_params("Invalid hex string"))?;
+        self.keyring.insert_key(ManagedKey {
+            key_id: key_id.to_string(),
+            key_type,
+            target_scope: target_scope.to_string(),
+            secret_bytes: bytes.clone(),
+        });
 
         Ok(json!({
             "status": "Key stored successfully in KeyRing",
             "key_id": key_id,
+            "key_type": key_type_str,
+            "target_scope": target_scope,
             "key_len_bytes": bytes.len()
         }))
     }
 
     fn tool_request_active_probe(&mut self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
         // Strict Tier-0 Zero-TX boundary check
-        let token = args.get("permit_token").and_then(|v| v.as_str());
+        let token = args
+            .get("permit_id")
+            .or_else(|| args.get("permit_token"))
+            .and_then(|v| v.as_str());
 
         if token.is_none() || self.current_safety_tier == SafetyTier::PassiveListenOnly {
             return Err(McpError::safety_violation(

@@ -19,6 +19,61 @@ pub struct PeriodicStats {
     pub estimated_freq_hz: f64,
 }
 
+/// Online statistical tracker using Welford's algorithm for running mean, variance, and jitter
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WelfordTracker {
+    pub last_timestamp_us: Option<u64>,
+    pub sample_count: u64,
+    mean_us: f64,
+    m2_us: f64,
+}
+
+impl WelfordTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Update with incoming observation timestamp (in microseconds)
+    pub fn update(&mut self, timestamp_us: u64) {
+        self.sample_count += 1;
+
+        if let Some(prev) = self.last_timestamp_us {
+            if timestamp_us > prev {
+                let delta_us = (timestamp_us - prev) as f64;
+                let count = self.sample_count.saturating_sub(1) as f64;
+                let delta = delta_us - self.mean_us;
+                self.mean_us += delta / count;
+                let delta2 = delta_us - self.mean_us;
+                self.m2_us += delta * delta2;
+            }
+        }
+
+        self.last_timestamp_us = Some(timestamp_us);
+    }
+
+    /// Calculate polling rate in Hz and jitter in milliseconds
+    pub fn rate_and_jitter(&self) -> (f64, f64) {
+        if self.sample_count < 2 {
+            return (1.0, 0.0);
+        }
+
+        let n = (self.sample_count - 1) as f64;
+        let variance_us = if n > 1.0 { self.m2_us / (n - 1.0) } else { 0.0 };
+        let std_dev_us = variance_us.sqrt();
+
+        let mean_ms = self.mean_us / 1000.0;
+        let jitter_ms = std_dev_us / 1000.0;
+
+        let freq_hz = if mean_ms > 0.001 {
+            1000.0 / mean_ms
+        } else {
+            0.0
+        };
+
+        (freq_hz, jitter_ms)
+    }
+}
+
 /// Online statistical tracker for a single CAN arbitration ID
 /// (Ported from SavvyCAN interval histogram and timing logic)
 #[derive(Debug, Clone)]

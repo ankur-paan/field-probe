@@ -14,7 +14,7 @@ pub use catalog::{InferredRegisterEntry, RegisterCatalog};
 pub use decoder::{decode_float32, decode_register_representations, InferredValue, WordOrder};
 pub use diff_capture::{DiffCaptureReport, DiffCaptureSession, MutatedEntity};
 pub use engine::{InferenceEngine, InferenceSummary};
-pub use histogram::{IdTimingTracker, PeriodicStats, TimingHistogramEngine};
+pub use histogram::{IdTimingTracker, PeriodicStats, TimingHistogramEngine, WelfordTracker};
 pub use pairing::{MatchedTransaction, TransactionMatcher};
 pub use plausibility::{PlausibilityCandidate, PlausibilityScorer};
 pub use signals::{SignalByteOrder, SignalDefinition};

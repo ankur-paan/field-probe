@@ -1,5 +1,6 @@
 # Ignored directories and local specifications
 agents.md
+combined_output.txt
 binaries/
 reference/
 target/
