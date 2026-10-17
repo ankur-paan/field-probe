@@ -1,10 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{
-    handler::McpServerState,
-    tools::get_tool_definitions,
-};
+use crate::{handler::McpServerState, tools::get_tool_definitions};
 
 /// Incoming JSON-RPC 2.0 Request
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,7 +94,11 @@ pub fn process_json_rpc(state: &mut McpServerState, raw_json: &str) -> Option<St
             }
         }
         "tools/call" => {
-            let tool_name = req.params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let tool_name = req
+                .params
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let arguments = req.params.get("arguments").cloned().unwrap_or(json!({}));
 
             match state.execute_tool(tool_name, &arguments) {

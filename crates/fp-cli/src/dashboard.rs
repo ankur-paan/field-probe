@@ -4,7 +4,9 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use fp_core::{CanFrame, CanId, SafetyTier};
-use fp_dissectors::{ComplianceIssue, ComplianceReport, ModbusPdu, ModbusRtuAdu, ViolationSeverity};
+use fp_dissectors::{
+    ComplianceIssue, ComplianceReport, ModbusPdu, ModbusRtuAdu, ViolationSeverity,
+};
 use fp_inference::{DiffCaptureReport, InferenceEngine};
 use ratatui::{
     backend::CrosstermBackend,
@@ -123,8 +125,10 @@ impl DashboardState {
             },
             crc16: 0x5678,
         };
-        self.engine.ingest_modbus_frame(&query_counter, t_us + 5_000);
-        self.engine.ingest_modbus_frame(&resp_counter, t_us + 18_000);
+        self.engine
+            .ingest_modbus_frame(&query_counter, t_us + 5_000);
+        self.engine
+            .ingest_modbus_frame(&resp_counter, t_us + 18_000);
         self.compliance.audit_modbus_adu(&query_counter);
         self.compliance.audit_modbus_adu(&resp_counter);
         self.frame_count += 2;
@@ -147,7 +151,11 @@ impl DashboardState {
 
         // If diff capture is active, mutate a specific bit on CAN frame 0x120 or Register 40001
         if self.engine.diff_session.is_active() && step.is_multiple_of(4) {
-            let toggle_bit = if (step / 4).is_multiple_of(2) { 0x01 } else { 0x00 };
+            let toggle_bit = if (step / 4).is_multiple_of(2) {
+                0x01
+            } else {
+                0x00
+            };
             let can_switch = CanFrame::new_standard(
                 0x120,
                 &[0x01, toggle_bit, sensor_val, 0x00, 0x00, 0xAA, 0xBB, 0xCC],
@@ -342,29 +350,63 @@ fn draw_header(frame: &mut Frame, app: &DashboardState, area: Rect) {
     let summary = app.engine.get_summary();
 
     let tier_style = match app.tier {
-        SafetyTier::PassiveListenOnly => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-        SafetyTier::ReadOnlyProbe => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        SafetyTier::PassiveListenOnly => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        SafetyTier::ReadOnlyProbe => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
         SafetyTier::ActiveWrite => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
     };
 
     let header_lines = vec![
         Line::from(vec![
-            Span::styled("field-probe v", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(env!("CARGO_PKG_VERSION"), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "field-probe v",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                env!("CARGO_PKG_VERSION"),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" — AI-Native Industrial Bus Protocol Analyzer  │  Safety Mode: "),
             Span::styled(format!("{} (Zero-TX: YES)", app.tier.name()), tier_style),
         ]),
         Line::from(vec![
             Span::raw("Bus Status:  "),
-            Span::styled("LOCKED", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw(format!(" [{} @ {} bps]  │  Frames: ", app.protocol, app.baud)),
-            Span::styled(format!("{:<8}", app.frame_count), Style::default().fg(Color::White)),
+            Span::styled(
+                "LOCKED",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!(
+                " [{} @ {} bps]  │  Frames: ",
+                app.protocol, app.baud
+            )),
+            Span::styled(
+                format!("{:<8}", app.frame_count),
+                Style::default().fg(Color::White),
+            ),
             Span::raw(" │  Registers: "),
-            Span::styled(format!("{:<4}", summary.total_discovered_registers), Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("{:<4}", summary.total_discovered_registers),
+                Style::default().fg(Color::Yellow),
+            ),
             Span::raw(" │  CAN Nodes: "),
-            Span::styled(format!("{:<4}", summary.total_active_can_nodes), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("{:<4}", summary.total_active_can_nodes),
+                Style::default().fg(Color::Cyan),
+            ),
             Span::raw(" │  Periodic Loops: "),
-            Span::styled(format!("{:<4}", summary.periodic_can_loops), Style::default().fg(Color::Magenta)),
+            Span::styled(
+                format!("{:<4}", summary.periodic_can_loops),
+                Style::default().fg(Color::Magenta),
+            ),
         ]),
     ];
 
@@ -436,7 +478,8 @@ fn draw_catalog_tab(frame: &mut Frame, app: &DashboardState, area: Rect) {
                     Cell::from(entry.raw_hex.clone()).style(Style::default().fg(Color::Cyan)),
                     Cell::from(format!("{:.1} Hz", entry.polling_frequency_hz)),
                     Cell::from(format!("{:.1} ms", entry.jitter_ms)),
-                    Cell::from(entry.plausible_type.clone()).style(Style::default().fg(Color::Yellow)),
+                    Cell::from(entry.plausible_type.clone())
+                        .style(Style::default().fg(Color::Yellow)),
                     Cell::from(format!("{:.2}", entry.confidence))
                         .style(Style::default().fg(conf_color).add_modifier(Modifier::BOLD)),
                 ])
@@ -513,7 +556,13 @@ fn draw_sniffer_tab(frame: &mut Frame, app: &DashboardState, area: Rect) {
                     .marker
                     .iter()
                     .take(slot.dlc)
-                    .map(|b| if *b != 0 { format!("{:02X}", b) } else { "..".to_string() })
+                    .map(|b| {
+                        if *b != 0 {
+                            format!("{:02X}", b)
+                        } else {
+                            "..".to_string()
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join(" ");
 
@@ -530,7 +579,11 @@ fn draw_sniffer_tab(frame: &mut Frame, app: &DashboardState, area: Rect) {
                 };
 
                 Row::new(vec![
-                    Cell::from(id_str).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Cell::from(id_str).style(
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Cell::from(slot.dlc.to_string()),
                     Cell::from(hex_data).style(Style::default().fg(Color::White)),
                     Cell::from(delta_mask).style(Style::default().fg(Color::Yellow)),
@@ -634,9 +687,9 @@ fn draw_compliance_tab(frame: &mut Frame, app: &DashboardState, area: Rect) {
                     ViolationSeverity::Critical => {
                         Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
                     }
-                    ViolationSeverity::Warning => {
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                    }
+                    ViolationSeverity::Warning => Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
                     ViolationSeverity::Notice => Style::default().fg(Color::Cyan),
                 };
 
@@ -708,7 +761,12 @@ fn draw_diff_tab(frame: &mut Frame, app: &DashboardState, area: Rect) {
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
             Span::raw("— Baseline snapshotted. Flip switch or mutate bus state. Press "),
-            Span::styled("[d]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[d]",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" to stop and isolate bit mutations."),
         ])
     } else {
@@ -745,8 +803,10 @@ fn draw_diff_tab(frame: &mut Frame, app: &DashboardState, area: Rect) {
                     Row::new(vec![
                         Cell::from(m.entity_type.clone()).style(Style::default().fg(Color::Cyan)),
                         Cell::from(m.identifier.clone()).style(Style::default().fg(Color::White)),
-                        Cell::from(m.baseline_value_hex.clone()).style(Style::default().fg(Color::DarkGray)),
-                        Cell::from(m.mutated_value_hex.clone()).style(Style::default().fg(Color::Yellow)),
+                        Cell::from(m.baseline_value_hex.clone())
+                            .style(Style::default().fg(Color::DarkGray)),
+                        Cell::from(m.mutated_value_hex.clone())
+                            .style(Style::default().fg(Color::Yellow)),
                         Cell::from(m.bitmask_diff.clone())
                             .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
                     ])
@@ -800,13 +860,33 @@ fn draw_diff_tab(frame: &mut Frame, app: &DashboardState, area: Rect) {
 /// Bottom footer displaying hotkeys and live system log messages
 fn draw_footer(frame: &mut Frame, app: &DashboardState, area: Rect) {
     let help_line = Line::from(vec![
-        Span::styled(" [Tab / 1-4] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " [Tab / 1-4] ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("Switch View  │ "),
-        Span::styled("[d] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[d] ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("Toggle Diff Capture  │ "),
-        Span::styled("[c] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[c] ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("Clear History  │ "),
-        Span::styled("[q / Esc] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[q / Esc] ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("Quit  │  "),
         Span::styled(&app.status_message, Style::default().fg(Color::Green)),
     ]);

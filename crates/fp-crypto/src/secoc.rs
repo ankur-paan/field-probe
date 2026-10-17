@@ -77,10 +77,8 @@ pub fn aes128_encrypt_block(block: &[u8; 16], round_keys: &[u8; 176]) -> [u8; 16
 
         // ShiftRows
         state = [
-            state[0], state[5], state[10], state[15],
-            state[4], state[9], state[14], state[3],
-            state[8], state[13], state[2], state[7],
-            state[12], state[1], state[6], state[11],
+            state[0], state[5], state[10], state[15], state[4], state[9], state[14], state[3],
+            state[8], state[13], state[2], state[7], state[12], state[1], state[6], state[11],
         ];
 
         // MixColumns
@@ -112,10 +110,8 @@ pub fn aes128_encrypt_block(block: &[u8; 16], round_keys: &[u8; 176]) -> [u8; 16
     }
 
     state = [
-        state[0], state[5], state[10], state[15],
-        state[4], state[9], state[14], state[3],
-        state[8], state[13], state[2], state[7],
-        state[12], state[1], state[6], state[11],
+        state[0], state[5], state[10], state[15], state[4], state[9], state[14], state[3],
+        state[8], state[13], state[2], state[7], state[12], state[1], state[6], state[11],
     ];
 
     for i in 0..16 {
@@ -189,7 +185,11 @@ pub fn aes128_cmac(key: &[u8; 16], message: &[u8]) -> [u8; 16] {
             last_block[j] ^= k1[j];
         }
     } else {
-        let start = if message.is_empty() { 0 } else { (block_count - 1) * 16 };
+        let start = if message.is_empty() {
+            0
+        } else {
+            (block_count - 1) * 16
+        };
         let remaining = message.len().saturating_sub(start);
         if remaining > 0 {
             last_block[..remaining].copy_from_slice(&message[start..]);
@@ -247,27 +247,27 @@ mod tests {
     fn test_rfc4493_test_vectors() {
         // Test key from RFC 4493 Section 4
         let key = [
-            0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
-            0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c,
+            0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
+            0x4f, 0x3c,
         ];
 
         // Example 1: Empty message (length = 0)
         let cmac_0 = aes128_cmac(&key, &[]);
         let expected_0 = [
-            0xbb, 0x1d, 0x69, 0x29, 0xe9, 0x59, 0x37, 0x28,
-            0x7f, 0xa3, 0x7d, 0x12, 0x9b, 0x75, 0x67, 0x46,
+            0xbb, 0x1d, 0x69, 0x29, 0xe9, 0x59, 0x37, 0x28, 0x7f, 0xa3, 0x7d, 0x12, 0x9b, 0x75,
+            0x67, 0x46,
         ];
         assert_eq!(cmac_0, expected_0);
 
         // Example 2: 16-byte message
         let msg_16 = [
-            0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96,
-            0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a,
+            0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93,
+            0x17, 0x2a,
         ];
         let cmac_16 = aes128_cmac(&key, &msg_16);
         let expected_16 = [
-            0x07, 0x0a, 0x16, 0xb4, 0x6b, 0x4d, 0x41, 0x44,
-            0xf7, 0x9b, 0xdd, 0x9d, 0xd0, 0x4a, 0x28, 0x7c,
+            0x07, 0x0a, 0x16, 0xb4, 0x6b, 0x4d, 0x41, 0x44, 0xf7, 0x9b, 0xdd, 0x9d, 0xd0, 0x4a,
+            0x28, 0x7c,
         ];
         assert_eq!(cmac_16, expected_16);
     }
@@ -287,11 +287,19 @@ mod tests {
         let full_cmac = aes128_cmac(&key, &secured_data);
         let truncated_mac = &full_cmac[..4]; // 32-bit SecOC truncated tag
 
-        assert!(verify_secoc_mac(&key, data_id, &payload, freshness, truncated_mac));
+        assert!(verify_secoc_mac(
+            &key,
+            data_id,
+            &payload,
+            freshness,
+            truncated_mac
+        ));
 
         // Corrupted MAC should fail
         let mut bad_mac = truncated_mac.to_vec();
         bad_mac[0] ^= 0x01;
-        assert!(!verify_secoc_mac(&key, data_id, &payload, freshness, &bad_mac));
+        assert!(!verify_secoc_mac(
+            &key, data_id, &payload, freshness, &bad_mac
+        ));
     }
 }

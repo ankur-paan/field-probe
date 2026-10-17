@@ -73,8 +73,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command.as_str() {
         "sniff" => run_sniff_command(cli.interface.as_deref(), cli.replay.as_deref()).await?,
-        "autodetect" => run_autodetect_command(cli.interface.as_deref(), cli.replay.as_deref()).await?,
-        "dashboard" => run_dashboard_command(cli.interface.as_deref(), cli.replay.as_deref()).await?,
+        "autodetect" => {
+            run_autodetect_command(cli.interface.as_deref(), cli.replay.as_deref()).await?
+        }
+        "dashboard" => {
+            run_dashboard_command(cli.interface.as_deref(), cli.replay.as_deref()).await?
+        }
         "mcp" => run_mcp_command().await?,
         "serve" => {
             let port = cli
@@ -108,7 +112,10 @@ fn print_version() {
 
 fn print_help() {
     println!("==========================================================================");
-    println!("  field-probe v{} — AI-Native Industrial Bus Auto-Discovery Engine", env!("CARGO_PKG_VERSION"));
+    println!(
+        "  field-probe v{} — AI-Native Industrial Bus Auto-Discovery Engine",
+        env!("CARGO_PKG_VERSION")
+    );
     println!("==========================================================================");
     println!("USAGE:");
     println!("  fp <SUBCOMMAND> [OPTIONS]\n");
@@ -222,12 +229,25 @@ async fn run_sniff_command(
     while let Ok(event) = rx.recv().await {
         let (byte_count, preview) = match &event.payload {
             RawFrame::Serial(chunk) => {
-                let hex_str: Vec<String> = chunk.data.iter().take(8).map(|b| format!("{:02X}", b)).collect();
+                let hex_str: Vec<String> = chunk
+                    .data
+                    .iter()
+                    .take(8)
+                    .map(|b| format!("{:02X}", b))
+                    .collect();
                 (chunk.data.len(), format!("[{}]", hex_str.join(" ")))
             }
             RawFrame::Can(frame) => {
-                let hex_str: Vec<String> = frame.data.iter().take(8).map(|b| format!("{:02X}", b)).collect();
-                (frame.data.len(), format!("ID:0x{:X} [{}]", frame.id.as_raw(), hex_str.join(" ")))
+                let hex_str: Vec<String> = frame
+                    .data
+                    .iter()
+                    .take(8)
+                    .map(|b| format!("{:02X}", b))
+                    .collect();
+                (
+                    frame.data.len(),
+                    format!("ID:0x{:X} [{}]", frame.id.as_raw(), hex_str.join(" ")),
+                )
             }
         };
 
@@ -299,13 +319,25 @@ async fn run_autodetect_command(
     println!("  Detected Protocol:     {:?}", score.candidate_protocol);
     println!("  Valid CRC Frames:      {}", score.valid_crc_count);
     if let Some(ref hyp) = score.unknown_hypothesis {
-        println!("  Unknown Framer:        Discovered {}-byte frame hypothesis", hyp.frame_length);
+        println!(
+            "  Unknown Framer:        Discovered {}-byte frame hypothesis",
+            hyp.frame_length
+        );
         if let Some(ref crc) = hyp.detected_crc_type {
             println!("  Checksum Algorithm:    {}", crc);
         }
-        println!("  Inferred Fields:       {} distinct regions", hyp.fields.len());
+        println!(
+            "  Inferred Fields:       {} distinct regions",
+            hyp.fields.len()
+        );
         for f in &hyp.fields {
-            println!("    - [0x{:02X}..0x{:02X}] {:<18} {}", f.start_byte, f.start_byte + f.length, f.field_type.name(), f.description);
+            println!(
+                "    - [0x{:02X}..0x{:02X}] {:<18} {}",
+                f.start_byte,
+                f.start_byte + f.length,
+                f.field_type.name(),
+                f.description
+            );
         }
     }
     println!("  Status:                LOCKED (Passive sniffing verified)");
@@ -318,11 +350,7 @@ async fn run_dashboard_command(
     replay: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (rx, _handle, label) = get_event_receiver(interface, replay).await?;
-    let mut state = DashboardState::new(
-        SafetyTier::PassiveListenOnly,
-        "Modbus / CAN",
-        500_000,
-    );
+    let mut state = DashboardState::new(SafetyTier::PassiveListenOnly, "Modbus / CAN", 500_000);
     state.status_message = format!("Active: {} (Zero-TX)", label);
     run_interactive_dashboard_with_rx(state, Some(rx))?;
     Ok(())
@@ -341,12 +369,24 @@ async fn run_serve_command(port: u16) -> Result<(), Box<dyn std::error::Error>> 
     let addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&addr).await?;
     println!("==========================================================================");
-    println!("  field-probe HTTP Telemetry Server listening on http://127.0.0.1:{}", port);
+    println!(
+        "  field-probe HTTP Telemetry Server listening on http://127.0.0.1:{}",
+        port
+    );
     println!("==========================================================================");
     println!("  Health Check:    http://127.0.0.1:{}/health", port);
-    println!("  Dongle List:     http://127.0.0.1:{}/api/v1/dongles", port);
-    println!("  Bus Summary:     http://127.0.0.1:{}/api/v1/bus/summary", port);
-    println!("  Register Map:    http://127.0.0.1:{}/api/v1/catalog", port);
+    println!(
+        "  Dongle List:     http://127.0.0.1:{}/api/v1/dongles",
+        port
+    );
+    println!(
+        "  Bus Summary:     http://127.0.0.1:{}/api/v1/bus/summary",
+        port
+    );
+    println!(
+        "  Register Map:    http://127.0.0.1:{}/api/v1/catalog",
+        port
+    );
     println!("--------------------------------------------------------------------------");
     println!("Safety Invariant: Default tier is Tier-0 PassiveListenOnly (Zero-TX).");
     run_server(listener, state).await?;
@@ -357,7 +397,10 @@ async fn run_audit_command(replay: Option<&str>) -> Result<(), Box<dyn std::erro
     let mut report = ComplianceReport::new();
 
     if let Some(path) = replay {
-        println!("Running compliance audit on capture replay file '{}'...", path);
+        println!(
+            "Running compliance audit on capture replay file '{}'...",
+            path
+        );
         let events = load_replay_file(path)?;
         for ev in &events {
             if let RawFrame::Serial(chunk) = &ev.payload {
@@ -395,10 +438,19 @@ async fn run_audit_command(replay: Option<&str>) -> Result<(), Box<dyn std::erro
 
     println!("--------------------------------------------------------------------------");
     println!("Compliance Audit Report:");
-    println!("  Total Frames Analyzed:   {}", report.total_frames_analyzed);
+    println!(
+        "  Total Frames Analyzed:   {}",
+        report.total_frames_analyzed
+    );
     println!("  CRC Errors:              {}", report.crc_error_count);
-    println!("  Protocol Violations:     {}", report.protocol_violation_count);
-    println!("  Link Health Score:       {:.2}%", report.link_health_score * 100.0);
+    println!(
+        "  Protocol Violations:     {}",
+        report.protocol_violation_count
+    );
+    println!(
+        "  Link Health Score:       {:.2}%",
+        report.link_health_score * 100.0
+    );
     println!("  Issues Detected:         {}", report.issues.len());
     for issue in &report.issues {
         println!("   - [{:?}] {}", issue.severity, issue.description);
@@ -407,8 +459,14 @@ async fn run_audit_command(replay: Option<&str>) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-async fn run_export_command(format: &str, replay: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Exporting field-probe telemetry artifacts in '{}' format...", format);
+async fn run_export_command(
+    format: &str,
+    replay: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!(
+        "Exporting field-probe telemetry artifacts in '{}' format...",
+        format
+    );
     let mut catalog = fp_inference::RegisterCatalog::new();
 
     if let Some(path) = replay {
@@ -445,18 +503,16 @@ async fn run_export_command(format: &str, replay: Option<&str>) -> Result<(), Bo
 
     let content = match format.to_lowercase().as_str() {
         "dbc" => {
-            let signals = vec![
-                fp_inference::SignalDefinition::new(
-                    "EngineSpeed",
-                    0,
-                    16,
-                    fp_inference::SignalByteOrder::LittleEndian,
-                    false,
-                    0.125,
-                    0.0,
-                    "rpm",
-                ),
-            ];
+            let signals = vec![fp_inference::SignalDefinition::new(
+                "EngineSpeed",
+                0,
+                16,
+                fp_inference::SignalByteOrder::LittleEndian,
+                false,
+                0.125,
+                0.0,
+                "rpm",
+            )];
             fp_inference::export_dbc(&[(0xCF00400, "EEC1", 8, signals)])
         }
         "pcapng" => {
@@ -464,12 +520,18 @@ async fn run_export_command(format: &str, replay: Option<&str>) -> Result<(), Bo
                 interface_id: "can0".into(),
                 timestamp_us: 1000,
                 link_params: fp_core::LinkParams::Serial(fp_core::SerialParams::default()),
-                payload: fp_core::RawFrame::Can(fp_core::CanFrame::new_standard(0x7DF, &[2, 1, 0, 0, 0, 0, 0, 0])),
+                payload: fp_core::RawFrame::Can(fp_core::CanFrame::new_standard(
+                    0x7DF,
+                    &[2, 1, 0, 0, 0, 0, 0, 0],
+                )),
                 direction: fp_core::Direction::Rx,
                 error_flags: Default::default(),
             };
             let bytes = fp_inference::export_pcapng(&[ev]);
-            format!("PCAP-NG export: {} binary bytes generated successfully.", bytes.len())
+            format!(
+                "PCAP-NG export: {} binary bytes generated successfully.",
+                bytes.len()
+            )
         }
         "telegraf" => fp_inference::export_telegraf(&catalog),
         "nodered" => fp_inference::export_nodered_flow(&catalog),
@@ -481,4 +543,3 @@ async fn run_export_command(format: &str, replay: Option<&str>) -> Result<(), Bo
     println!("--------------------------------------------------------------------------");
     Ok(())
 }
-

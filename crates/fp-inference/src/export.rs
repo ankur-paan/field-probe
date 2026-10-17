@@ -9,9 +9,7 @@ use fp_core::{CanId, RawBusEvent, RawFrame};
 use serde_json::json;
 
 /// Export CAN signals and message definitions to standard Vector DBC format
-pub fn export_dbc(
-    messages: &[(u32, &str, usize, Vec<SignalDefinition>)],
-) -> String {
+pub fn export_dbc(messages: &[(u32, &str, usize, Vec<SignalDefinition>)]) -> String {
     let mut out = String::new();
     out.push_str("VERSION \"\"\n\n");
     out.push_str("NS_ :\n\n");
@@ -32,7 +30,8 @@ pub fn export_dbc(
             let sign_char = if sig.is_signed { '-' } else { '+' };
 
             // Calculate theoretical min/max
-            let max_raw = (1u64.checked_shl(sig.bit_length as u32).unwrap_or(u64::MAX)).saturating_sub(1);
+            let max_raw =
+                (1u64.checked_shl(sig.bit_length as u32).unwrap_or(u64::MAX)).saturating_sub(1);
             let min_val = sig.offset;
             let max_val = (max_raw as f64) * sig.scale + sig.offset;
 
@@ -232,8 +231,26 @@ mod tests {
     #[test]
     fn test_export_dbc_generation() {
         let signals = vec![
-            SignalDefinition::new("EngineSpeed", 0, 16, SignalByteOrder::LittleEndian, false, 0.125, 0.0, "rpm"),
-            SignalDefinition::new("EngineTorque", 16, 8, SignalByteOrder::LittleEndian, true, 1.0, -125.0, "%"),
+            SignalDefinition::new(
+                "EngineSpeed",
+                0,
+                16,
+                SignalByteOrder::LittleEndian,
+                false,
+                0.125,
+                0.0,
+                "rpm",
+            ),
+            SignalDefinition::new(
+                "EngineTorque",
+                16,
+                8,
+                SignalByteOrder::LittleEndian,
+                true,
+                1.0,
+                -125.0,
+                "%",
+            ),
         ];
 
         let messages = vec![(0xCF00400, "EEC1", 8, signals)];
@@ -274,10 +291,10 @@ mod tests {
         // IDB 0 starts at offset 28
         assert_eq!(&pcap[28..32], &[0x01, 0x00, 0x00, 0x00]); // Block type IDB
         assert_eq!(&pcap[36..38], &227u16.to_le_bytes()); // LinkType 227 (CAN)
-        // IDB 1 starts at offset 28 + 20 = 48
+                                                          // IDB 1 starts at offset 28 + 20 = 48
         assert_eq!(&pcap[48..52], &[0x01, 0x00, 0x00, 0x00]); // Block type IDB
         assert_eq!(&pcap[56..58], &250u16.to_le_bytes()); // LinkType 250 (RTAC Serial)
-        // EPB 0 starts at offset 68
+                                                          // EPB 0 starts at offset 68
         assert_eq!(&pcap[68..72], &[0x06, 0x00, 0x00, 0x00]); // Block type EPB
         assert_eq!(&pcap[76..80], &0u32.to_le_bytes()); // Interface ID 0 for CAN
     }

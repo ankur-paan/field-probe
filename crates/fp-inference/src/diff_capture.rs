@@ -6,7 +6,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MutatedEntity {
     pub entity_type: String, // "ModbusRegister" or "CanId"
-    pub identifier: String,   // "Slave 1 / Reg 40001" or "CAN 0x123"
+    pub identifier: String,  // "Slave 1 / Reg 40001" or "CAN 0x123"
     pub baseline_value_hex: String,
     pub mutated_value_hex: String,
     pub bitmask_diff: String,
@@ -34,7 +34,7 @@ pub struct DiffCaptureSession {
     register_notches: HashMap<String, u16>,   // ambient fluctuating bitmask per register
     baseline_can_slots: HashMap<CanId, [u8; 8]>,
     current_can_slots: HashMap<CanId, ([u8; 8], u64)>,
-    can_notches: HashMap<CanId, [u8; 8]>,     // ambient fluctuating bitmask per CAN ID
+    can_notches: HashMap<CanId, [u8; 8]>, // ambient fluctuating bitmask per CAN ID
 }
 
 impl DiffCaptureSession {

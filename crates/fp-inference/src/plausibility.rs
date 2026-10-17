@@ -215,7 +215,10 @@ fn score_fixed_point_integer(r0: u16) -> Option<(String, String, f32, String)> {
             "Fixed-Point (Grid Frequency 50Hz)".to_string(),
             format!("{:.2} Hz", freq),
             0.95,
-            format!("16-bit scaled by 0.01 matching 50 Hz grid frequency ({:.2} Hz)", freq),
+            format!(
+                "16-bit scaled by 0.01 matching 50 Hz grid frequency ({:.2} Hz)",
+                freq
+            ),
         ));
     }
     if (5950..=6050).contains(&r0) {
@@ -224,7 +227,10 @@ fn score_fixed_point_integer(r0: u16) -> Option<(String, String, f32, String)> {
             "Fixed-Point (Grid Frequency 60Hz)".to_string(),
             format!("{:.2} Hz", freq),
             0.95,
-            format!("16-bit scaled by 0.01 matching 60 Hz grid frequency ({:.2} Hz)", freq),
+            format!(
+                "16-bit scaled by 0.01 matching 60 Hz grid frequency ({:.2} Hz)",
+                freq
+            ),
         ));
     }
 
@@ -235,7 +241,10 @@ fn score_fixed_point_integer(r0: u16) -> Option<(String, String, f32, String)> {
             "Fixed-Point (Line Voltage)".to_string(),
             format!("{:.1} V", volts),
             0.92,
-            format!("16-bit scaled by 0.1 matching nominal 230V mains ({:.1} V)", volts),
+            format!(
+                "16-bit scaled by 0.1 matching nominal 230V mains ({:.1} V)",
+                volts
+            ),
         ));
     }
 
@@ -247,7 +256,10 @@ fn score_fixed_point_integer(r0: u16) -> Option<(String, String, f32, String)> {
             "Fixed-Point (Temperature x0.1)".to_string(),
             format!("{:.1} °C", temp),
             0.82,
-            format!("16-bit signed integer scaled by 0.1 within industrial temp range ({:.1} °C)", temp),
+            format!(
+                "16-bit signed integer scaled by 0.1 within industrial temp range ({:.1} °C)",
+                temp
+            ),
         ));
     }
 
@@ -265,7 +277,10 @@ fn score_float_sequence(hist: &SampleHistory, order: WordOrder, current: f32) ->
     if abs_val > 0.0 && !(1e-12..=1e12).contains(&abs_val) {
         return (
             0.01,
-            format!("Astronomical magnitude ({:.2e}) typical of misaligned bytes", current),
+            format!(
+                "Astronomical magnitude ({:.2e}) typical of misaligned bytes",
+                current
+            ),
         );
     }
 
@@ -295,17 +310,29 @@ fn score_float_sequence(hist: &SampleHistory, order: WordOrder, current: f32) ->
     if max_delta < 5.0 && is_typical_sensor_range {
         (
             0.95,
-            format!("High temporal stability (avg delta {:.3}) in sensor range", avg_delta),
+            format!(
+                "High temporal stability (avg delta {:.3}) in sensor range",
+                avg_delta
+            ),
         )
     } else if max_delta < 50.0 && is_typical_sensor_range {
         (
             0.85,
-            format!("Smoothly varying physical value (avg delta {:.2})", avg_delta),
+            format!(
+                "Smoothly varying physical value (avg delta {:.2})",
+                avg_delta
+            ),
         )
     } else if is_typical_sensor_range {
-        (0.65, "Valid sensor magnitude with fluctuating readings".to_string())
+        (
+            0.65,
+            "Valid sensor magnitude with fluctuating readings".to_string(),
+        )
     } else {
-        (0.25, "Finite float outside common industrial sensor ranges".to_string())
+        (
+            0.25,
+            "Finite float outside common industrial sensor ranges".to_string(),
+        )
     }
 }
 
@@ -317,11 +344,7 @@ mod tests {
     fn test_plausibility_scores_smooth_temperature_cdab() {
         let mut scorer = PlausibilityScorer::new();
 
-        let samples = [
-            (0x47AE, 0x41BB),
-            (0x999A, 0x41BB),
-            (0xD70A, 0x41BB),
-        ];
+        let samples = [(0x47AE, 0x41BB), (0x999A, 0x41BB), (0xD70A, 0x41BB)];
 
         let mut ranked = Vec::new();
         for s in samples {

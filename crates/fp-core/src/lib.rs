@@ -13,6 +13,7 @@ pub mod params;
 pub mod safety;
 
 pub use capabilities::{AdapterCapabilities, IndustrialChip};
+pub use chrono;
 pub use error::HalError;
 pub use events::{
     BusErrorFlags, CanFrame, CanId, Direction, OutboundFrame, RawBusEvent, RawFrame,
@@ -23,5 +24,3 @@ pub use params::{
     SerialParams, SerialSilenceIntervals, StopBits, COMMON_CAN_BITRATES, COMMON_SERIAL_BAUD_RATES,
 };
 pub use safety::{SafetyPermit, SafetyTier};
-pub use chrono;
-

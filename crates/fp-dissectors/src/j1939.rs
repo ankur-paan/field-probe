@@ -17,8 +17,8 @@ pub struct J1939Header {
 /// Standard J1939 Parameter Group Numbers (PGNs)
 pub const PGN_EEC1: u32 = 61444; // 0x00F004 - Electronic Engine Controller 1
 pub const PGN_EEC2: u32 = 61443; // 0x00F003 - Electronic Engine Controller 2
-pub const PGN_ET1: u32 = 65262;  // 0x00FEEE - Engine Temperature 1
-pub const PGN_CCVS1: u32 = 65265;// 0x00FEF1 - Cruise Control/Vehicle Speed 1
+pub const PGN_ET1: u32 = 65262; // 0x00FEEE - Engine Temperature 1
+pub const PGN_CCVS1: u32 = 65265; // 0x00FEF1 - Cruise Control/Vehicle Speed 1
 pub const PGN_ADDRESS_CLAIMED: u32 = 60928; // 0x00EE00
 
 // J1939 Transport Protocol PGNs
@@ -26,10 +26,10 @@ pub const PGN_TP_CM: u32 = 60416; // 0x00EC00 - Transport Protocol Connection Ma
 pub const PGN_TP_DT: u32 = 60160; // 0x00EB00 - Transport Protocol Data Transfer
 
 // Standard Multi-Packet PGNs
-pub const PGN_DM1: u32 = 65226;          // 0x00FECA - Active Diagnostic Trouble Codes
+pub const PGN_DM1: u32 = 65226; // 0x00FECA - Active Diagnostic Trouble Codes
 pub const PGN_COMPONENT_ID: u32 = 65259; // 0x00FEEB - Component Identification
-pub const PGN_VIN: u32 = 65260;          // 0x00FEEC - Vehicle Identification Number
-pub const PGN_SOFTWARE_ID: u32 = 65242;  // 0x00FEDA - Software Identification
+pub const PGN_VIN: u32 = 65260; // 0x00FEEC - Vehicle Identification Number
+pub const PGN_SOFTWARE_ID: u32 = 65242; // 0x00FEDA - Software Identification
 
 /// Diagnostic Trouble Code (DTC) decoded from J1939 DM1 Active Trouble Codes
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,10 +88,7 @@ pub enum J1939Payload {
         target_pgn: u32,
     },
     /// PGN 60160 (TP.DT Data Transfer Frame)
-    TransportDataTransfer {
-        sequence_number: u8,
-        data: Vec<u8>,
-    },
+    TransportDataTransfer { sequence_number: u8, data: Vec<u8> },
     /// General or unrecognized PGN
     Generic {
         pgn: u32,
@@ -210,7 +207,10 @@ pub fn dissect_j1939_payload(pgn: u32, data: &[u8]) -> J1939Payload {
             }
         }
         PGN_VIN => {
-            let vin_str = String::from_utf8_lossy(data).trim_matches('\0').trim().to_string();
+            let vin_str = String::from_utf8_lossy(data)
+                .trim_matches('\0')
+                .trim()
+                .to_string();
             J1939Payload::VehicleIdentificationNumber(vin_str)
         }
         PGN_COMPONENT_ID => {
@@ -243,7 +243,10 @@ pub fn dissect_j1939_payload(pgn: u32, data: &[u8]) -> J1939Payload {
                     spn,
                     fmi,
                     occurrence_count,
-                    description: format!("SPN {} FMI {} (Occurred {}x)", spn, fmi, occurrence_count),
+                    description: format!(
+                        "SPN {} FMI {} (Occurred {}x)",
+                        spn, fmi, occurrence_count
+                    ),
                 });
                 i += 4;
             }
@@ -333,7 +336,9 @@ impl J1939TransportReassembler {
 
                 let remaining = session.total_bytes.saturating_sub(session.buffer.len());
                 let bytes_in_packet = (data.len() - 1).min(remaining);
-                session.buffer.extend_from_slice(&data[1..1 + bytes_in_packet]);
+                session
+                    .buffer
+                    .extend_from_slice(&data[1..1 + bytes_in_packet]);
 
                 if session.buffer.len() >= session.total_bytes {
                     let completed = self.sessions.remove(&header.source_address)?;

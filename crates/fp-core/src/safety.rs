@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 
 /// Operational safety tier for connected bus adapters.
 /// Invariant: adapters MUST always default to `PassiveListenOnly`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 pub enum SafetyTier {
     /// Tier 0 (Default): Passive listen-only mode. Zero transmissions allowed.
     /// Hardware transceiver TX line is held tri-state or listen-only bit is set.

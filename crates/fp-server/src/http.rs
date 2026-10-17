@@ -53,7 +53,8 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<ServerState>) -> st
     let path = parts[1];
 
     if method != "GET" {
-        let resp = "HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+        let resp =
+            "HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
         writer.write_all(resp.as_bytes()).await?;
         return Ok(());
     }
@@ -110,7 +111,8 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<ServerState>) -> st
         "/api/v1/catalog" => (200, state.handle_catalog().await),
         "/api/v1/audit" => (200, state.handle_audit().await),
         _ => {
-            let not_found = "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+            let not_found =
+                "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
             writer.write_all(not_found.as_bytes()).await?;
             return Ok(());
         }

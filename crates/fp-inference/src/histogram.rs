@@ -203,7 +203,10 @@ impl TimingHistogramEngine {
     }
 
     pub fn record_frame(&mut self, can_id: CanId, timestamp_us: u64) {
-        let tracker = self.trackers.entry(can_id).or_insert_with(|| IdTimingTracker::new(can_id));
+        let tracker = self
+            .trackers
+            .entry(can_id)
+            .or_insert_with(|| IdTimingTracker::new(can_id));
         tracker.update(timestamp_us);
     }
 

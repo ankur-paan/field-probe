@@ -132,7 +132,10 @@ impl ServerState {
     pub async fn handle_export(&self, format: &str) -> (&'static str, Vec<u8>) {
         let engine = self.inference_engine.read().await;
         match format.to_lowercase().as_str() {
-            "dbc" => ("text/plain; charset=utf-8", fp_inference::export_dbc(&[]).into_bytes()),
+            "dbc" => (
+                "text/plain; charset=utf-8",
+                fp_inference::export_dbc(&[]).into_bytes(),
+            ),
             "pcapng" => (
                 "application/vnd.tcpdump.pcap",
                 fp_inference::export_pcapng(&[]),
@@ -145,7 +148,10 @@ impl ServerState {
                 "application/json",
                 fp_inference::export_nodered_flow(&engine.catalog).into_bytes(),
             ),
-            _ => ("application/json", fp_inference::export_json(&engine.catalog).into_bytes()),
+            _ => (
+                "application/json",
+                fp_inference::export_json(&engine.catalog).into_bytes(),
+            ),
         }
     }
 }

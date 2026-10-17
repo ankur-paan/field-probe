@@ -24,7 +24,11 @@ impl SocketCanDriver {
         Self::with_capacity(interface_name, 500_000, 100)
     }
 
-    pub fn with_capacity(interface_name: impl Into<String>, bitrate: u32, broadcast_cap: usize) -> Self {
+    pub fn with_capacity(
+        interface_name: impl Into<String>,
+        bitrate: u32,
+        broadcast_cap: usize,
+    ) -> Self {
         let name = interface_name.into();
         let (tx, _rx) = broadcast::channel(broadcast_cap);
         let caps = AdapterCapabilities {
@@ -140,7 +144,10 @@ impl SocketCanDriver {
     }
 
     /// Spawn an asynchronous worker loop that ingests CanFrames from an mpsc channel
-    pub fn spawn_frame_worker(&self, mut rx: tokio::sync::mpsc::Receiver<CanFrame>) -> tokio::task::JoinHandle<()> {
+    pub fn spawn_frame_worker(
+        &self,
+        mut rx: tokio::sync::mpsc::Receiver<CanFrame>,
+    ) -> tokio::task::JoinHandle<()> {
         let tx_sender = self.tx_sender.clone();
         let interface_name = self.interface_name.clone();
         let link_params = self.link_params.clone();
@@ -272,7 +279,9 @@ impl BusInterface for SocketCanDriver {
                 let _ = self.tx_sender.send(event);
                 Ok(())
             }
-            OutboundFrame::Serial(_) => Err(HalError::Io("SocketCAN driver only accepts CAN outbound frames".to_string())),
+            OutboundFrame::Serial(_) => Err(HalError::Io(
+                "SocketCAN driver only accepts CAN outbound frames".to_string(),
+            )),
         }
     }
 }
@@ -313,11 +322,17 @@ mod tests {
         );
 
         let frame = CanFrame::new_standard(0x7DF, &[0x02, 0x01, 0x00]);
-        let err = driver.transmit(OutboundFrame::Can(frame.clone()), &permit).await.unwrap_err();
+        let err = driver
+            .transmit(OutboundFrame::Can(frame.clone()), &permit)
+            .await
+            .unwrap_err();
         assert!(matches!(err, HalError::SafetyViolation { .. }));
 
         // Elevated tier with permit allows transmit
-        driver.set_safety_tier(SafetyTier::ReadOnlyProbe).await.unwrap();
+        driver
+            .set_safety_tier(SafetyTier::ReadOnlyProbe)
+            .await
+            .unwrap();
         assert!(!driver.listen_only_enforced);
 
         let res = driver.transmit(OutboundFrame::Can(frame), &permit).await;

@@ -83,9 +83,8 @@ impl Default for CanParams {
 }
 
 /// Common candidate baud rates for RS-485/RS-232 hunting
-pub const COMMON_SERIAL_BAUD_RATES: &[u32] = &[
-    9600, 19200, 38400, 57600, 115200, 4800, 2400, 230400,
-];
+pub const COMMON_SERIAL_BAUD_RATES: &[u32] =
+    &[9600, 19200, 38400, 57600, 115200, 4800, 2400, 230400];
 
 /// Common candidate bitrates for CAN bus hunting
 pub const COMMON_CAN_BITRATES: &[u32] = &[

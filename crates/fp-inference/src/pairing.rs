@@ -49,7 +49,10 @@ impl TransactionMatcher {
     ) -> Option<MatchedTransaction> {
         match &adu.pdu {
             // Queries
-            ModbusPdu::ReadHoldingRegistersQuery { start_addr, quantity } => {
+            ModbusPdu::ReadHoldingRegistersQuery {
+                start_addr,
+                quantity,
+            } => {
                 self.pending_queries.insert(
                     (adu.slave_id, 0x03),
                     PendingQuery {
@@ -60,7 +63,10 @@ impl TransactionMatcher {
                 );
                 None
             }
-            ModbusPdu::ReadInputRegistersQuery { start_addr, quantity } => {
+            ModbusPdu::ReadInputRegistersQuery {
+                start_addr,
+                quantity,
+            } => {
                 self.pending_queries.insert(
                     (adu.slave_id, 0x04),
                     PendingQuery {
@@ -73,7 +79,11 @@ impl TransactionMatcher {
             }
 
             // Responses
-            ModbusPdu::ReadResponse { function_code, byte_count, data } => {
+            ModbusPdu::ReadResponse {
+                function_code,
+                byte_count,
+                data,
+            } => {
                 let key = (adu.slave_id, *function_code);
                 if let Some(query) = self.pending_queries.remove(&key) {
                     let elapsed_us = timestamp_us.saturating_sub(query.timestamp_us);

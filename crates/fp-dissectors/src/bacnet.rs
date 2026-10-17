@@ -190,7 +190,10 @@ mod tests {
 
         // Valid frame with valid data CRC
         let frame = dissect_bacnet_mstp(&frame_bytes).expect("Valid BACnet Data frame with CRC-16");
-        assert_eq!(frame.frame_type, BacnetMstpFrameType::BacnetDataExpectingReply);
+        assert_eq!(
+            frame.frame_type,
+            BacnetMstpFrameType::BacnetDataExpectingReply
+        );
         assert_eq!(frame.payload, payload);
         assert_eq!(frame.data_crc, Some(data_crc));
 

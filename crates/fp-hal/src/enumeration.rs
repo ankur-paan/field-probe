@@ -51,7 +51,9 @@ pub fn enumerate_dongles() -> Vec<AdapterCapabilities> {
             supports_can_fd: false,
             supports_listen_only: true,
             supported_baud_rates: vec![115200, 230400],
-            supported_can_bitrates: vec![10_000, 20_000, 50_000, 100_000, 125_000, 250_000, 500_000, 800_000, 1_000_000],
+            supported_can_bitrates: vec![
+                10_000, 20_000, 50_000, 100_000, 125_000, 250_000, 500_000, 800_000, 1_000_000,
+            ],
             usb_vid: Some(0x0403),
             usb_pid: Some(0x6001),
             serial_number: Some("CANUSB-001".to_string()),
@@ -150,7 +152,9 @@ fn read_linux_usb_vid_pid(device_path: &str) -> (Option<u16>, Option<u16>, Indus
 
 #[cfg(target_os = "linux")]
 fn read_linux_sysfs_string(path: &str) -> Option<String> {
-    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 #[cfg(test)]
@@ -160,9 +164,15 @@ mod tests {
     #[test]
     fn test_enumerate_dongles_returns_valid_capabilities() {
         let dongles = enumerate_dongles();
-        assert!(!dongles.is_empty(), "Must discover at least one adapter capability");
+        assert!(
+            !dongles.is_empty(),
+            "Must discover at least one adapter capability"
+        );
         for d in &dongles {
-            assert!(d.supports_listen_only, "All adapters must support Tier-0 listen-only");
+            assert!(
+                d.supports_listen_only,
+                "All adapters must support Tier-0 listen-only"
+            );
             assert!(!d.interface_id.is_empty());
         }
     }

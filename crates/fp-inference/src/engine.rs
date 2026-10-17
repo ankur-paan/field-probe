@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 
 use fp_core::CanFrame;
-use fp_crypto::{auto_decrypt_payload, calculate_shannon_entropy, is_high_entropy_payload, KeyRing};
+use fp_crypto::{
+    auto_decrypt_payload, calculate_shannon_entropy, is_high_entropy_payload, KeyRing,
+};
 use fp_dissectors::{
     dissect_canopen, dissect_j1939, dissect_uds, parse_j1939_header, BacnetMstpFrame,
     CanOpenPayload, Dnp3Frame, IsoTpReassembler, J1939Payload, J1939TransportReassembler,
-    ModbusPdu, ModbusRtuAdu, UdsMessage, PGN_COMPONENT_ID, PGN_DM1, PGN_EEC1, PGN_ET1,
-    PGN_TP_CM, PGN_TP_DT, PGN_VIN,
+    ModbusPdu, ModbusRtuAdu, UdsMessage, PGN_COMPONENT_ID, PGN_DM1, PGN_EEC1, PGN_ET1, PGN_TP_CM,
+    PGN_TP_DT, PGN_VIN,
 };
 use serde::{Deserialize, Serialize};
 
@@ -95,7 +97,9 @@ impl InferenceEngine {
             }
         }
 
-        let mut matched = self.transaction_matcher.ingest_modbus_frame(adu, timestamp_us)?;
+        let mut matched = self
+            .transaction_matcher
+            .ingest_modbus_frame(adu, timestamp_us)?;
 
         // Update Welford timing tracker per (slave_id, start_address)
         let timing_tracker = self
@@ -114,7 +118,8 @@ impl InferenceEngine {
             } else {
                 8.0
             };
-            let is_high_entropy = entropy >= 7.2 || (data.len() >= 16 && entropy >= max_possible * 0.92);
+            let is_high_entropy =
+                entropy >= 7.2 || (data.len() >= 16 && entropy >= max_possible * 0.92);
 
             if is_high_entropy {
                 let decrypted = auto_decrypt_payload(&self.keyring, &node_str, data)
@@ -139,7 +144,9 @@ impl InferenceEngine {
                         jitter_ms: jitter_ms as f32,
                         raw_hex: format!(
                             "0x{}",
-                            data.iter().map(|b| format!("{:02X}", b)).collect::<String>()
+                            data.iter()
+                                .map(|b| format!("{:02X}", b))
+                                .collect::<String>()
                         ),
                         plausible_type: format!(
                             "Encrypted / High-Entropy (H={:.2} bits/byte - Key Required)",
@@ -159,7 +166,8 @@ impl InferenceEngine {
         let mut i = 0;
         while i < matched.register_values.len() {
             let (addr, val) = matched.register_values[i];
-            self.diff_session.record_register(matched.slave_id, addr, val, timestamp_us);
+            self.diff_session
+                .record_register(matched.slave_id, addr, val, timestamp_us);
 
             let next_addr = addr.wrapping_add(1);
             let next_val = matched
@@ -170,9 +178,9 @@ impl InferenceEngine {
 
             let mut advance_two = false;
             let (plausible_type, confidence) = if let Some(r1) = next_val {
-                let candidates = self
-                    .plausibility_scorer
-                    .evaluate_pair(&node_str, addr as u32, val, r1);
+                let candidates =
+                    self.plausibility_scorer
+                        .evaluate_pair(&node_str, addr as u32, val, r1);
                 if let Some(top) = candidates.first() {
                     let is_multi_reg = top.representation_name.starts_with("Float32")
                         || top.representation_name.starts_with("UInt32")
@@ -192,7 +200,8 @@ impl InferenceEngine {
 
             if advance_two {
                 let r1 = next_val.unwrap();
-                self.diff_session.record_register(matched.slave_id, next_addr, r1, timestamp_us);
+                self.diff_session
+                    .record_register(matched.slave_id, next_addr, r1, timestamp_us);
 
                 self.catalog.insert_or_update(InferredRegisterEntry {
                     node_or_slave: node_str.clone(),
@@ -271,8 +280,11 @@ impl InferenceEngine {
             fp_core::CanId::Extended(can_id_u32) => {
                 let header = parse_j1939_header(can_id_u32);
                 let reassembled = if header.pgn == PGN_TP_CM || header.pgn == PGN_TP_DT {
-                    self.j1939_reassembler
-                        .ingest_frame(can_id_u32, &processed_frame.data, timestamp_us)
+                    self.j1939_reassembler.ingest_frame(
+                        can_id_u32,
+                        &processed_frame.data,
+                        timestamp_us,
+                    )
                 } else {
                     dissect_j1939(can_id_u32, &processed_frame.data)
                 };
@@ -586,13 +598,19 @@ mod tests {
             },
             crc16: 0,
         };
-        let matched = engine.ingest_modbus_frame(&resp, 1_015_000).expect("Matched transaction");
+        let matched = engine
+            .ingest_modbus_frame(&resp, 1_015_000)
+            .expect("Matched transaction");
         assert_eq!(matched.latency_us, 15_000);
 
         let summary = engine.get_summary();
         assert_eq!(summary.total_discovered_registers, 1);
 
-        let entry = engine.catalog.entries.get("Slave_1:40001").expect("Catalog entry");
+        let entry = engine
+            .catalog
+            .entries
+            .get("Slave_1:40001")
+            .expect("Catalog entry");
         assert!(entry.plausible_type.contains("Float32 (CDAB"));
         assert!(entry.confidence >= 0.70);
         assert_eq!(entry.raw_hex, "0x999A41BB");
@@ -629,7 +647,11 @@ mod tests {
         };
         engine.ingest_modbus_frame(&resp, 1_010_000);
 
-        let entry = engine.catalog.entries.get("Slave_2:40500").expect("Catalog entry");
+        let entry = engine
+            .catalog
+            .entries
+            .get("Slave_2:40500")
+            .expect("Catalog entry");
         assert!(entry.plausible_type.contains("Encrypted / High-Entropy"));
     }
 
@@ -711,14 +733,20 @@ mod tests {
             },
             crc16: 0,
         };
-        let matched = engine.ingest_modbus_frame(&resp, 2_010_000).expect("Matched transaction");
+        let matched = engine
+            .ingest_modbus_frame(&resp, 2_010_000)
+            .expect("Matched transaction");
 
         // Regression test for Bug 1.2: Register values MUST reflect decrypted plaintext, not raw ciphertext
         assert_eq!(matched.register_values[0], (100, 0x42F6));
         assert_eq!(matched.register_values[1], (101, 0xE666));
 
         // Catalog entry should be inferred as Float32 rather than encrypted block
-        let entry = engine.catalog.entries.get("Slave_3:100").expect("Catalog entry");
+        let entry = engine
+            .catalog
+            .entries
+            .get("Slave_3:100")
+            .expect("Catalog entry");
         assert!(entry.plausible_type.contains("Float32"));
     }
 
@@ -727,10 +755,17 @@ mod tests {
         let mut engine = InferenceEngine::new(500_000, 1000);
 
         // EEC1 frame for engine speed = 1024.0 RPM on 29-bit CAN ID 0x0CF00400 (SA 0x00)
-        let f = CanFrame::new_extended(0x0CF00400, &[0x00, 0x7D, 0x7D, 0x00, 0x20, 0x00, 0x00, 0x00]);
+        let f = CanFrame::new_extended(
+            0x0CF00400,
+            &[0x00, 0x7D, 0x7D, 0x00, 0x20, 0x00, 0x00, 0x00],
+        );
         engine.ingest_can_frame(&f, 1_000_000);
 
-        let entry = engine.catalog.entries.get("J1939:0x00:61444").expect("EEC1 catalog entry");
+        let entry = engine
+            .catalog
+            .entries
+            .get("J1939:0x00:61444")
+            .expect("EEC1 catalog entry");
         assert!(entry.plausible_type.contains("1024.00 RPM"));
         assert_eq!(entry.confidence, 1.0);
 
@@ -753,7 +788,11 @@ mod tests {
         let dt3 = [3, b'1', b'2', b'3', 0xFF, 0xFF, 0xFF, 0xFF];
         engine.ingest_can_frame(&CanFrame::new_extended(dt_can_id, &dt3), 1_040_000);
 
-        let vin_entry = engine.catalog.entries.get("J1939:0x00:65260").expect("VIN catalog entry");
+        let vin_entry = engine
+            .catalog
+            .entries
+            .get("J1939:0x00:65260")
+            .expect("VIN catalog entry");
         assert!(vin_entry.plausible_type.contains("VIN: 1HGCR2F83HA000123"));
         assert_eq!(vin_entry.confidence, 1.0);
     }
@@ -766,7 +805,11 @@ mod tests {
         let f = CanFrame::new_standard(0x7E8, &[0x04, 0x62, 0xF1, 0x90, 0x41, 0x00, 0x00, 0x00]);
         engine.ingest_can_frame(&f, 1_000_000);
 
-        let entry = engine.catalog.entries.get("UDS:0x7E8:61840").expect("UDS DID entry");
+        let entry = engine
+            .catalog
+            .entries
+            .get("UDS:0x7E8:61840")
+            .expect("UDS DID entry");
         assert!(entry.plausible_type.contains("UDS DID 0xF190 Data"));
         assert_eq!(entry.confidence, 1.0);
     }
@@ -779,7 +822,11 @@ mod tests {
         let f = CanFrame::new_standard(0x705, &[0x05]);
         engine.ingest_can_frame(&f, 1_000_000);
 
-        let entry = engine.catalog.entries.get("CANopen:5:1797").expect("CANopen NMT entry");
+        let entry = engine
+            .catalog
+            .entries
+            .get("CANopen:5:1797")
+            .expect("CANopen NMT entry");
         assert!(entry.plausible_type.contains("Operational"));
         assert_eq!(entry.confidence, 1.0);
     }
@@ -805,11 +852,19 @@ mod tests {
         };
         engine.ingest_modbus_frame(&adu, 1_000_000);
 
-        let entry_vendor = engine.catalog.entries.get("Slave_1:11008").expect("Vendor entry");
+        let entry_vendor = engine
+            .catalog
+            .entries
+            .get("Slave_1:11008")
+            .expect("Vendor entry");
         assert!(entry_vendor.plausible_type.contains("Schneider Electric"));
         assert_eq!(entry_vendor.confidence, 1.0);
 
-        let entry_prod = engine.catalog.entries.get("Slave_1:11009").expect("Product entry");
+        let entry_prod = engine
+            .catalog
+            .entries
+            .get("Slave_1:11009")
+            .expect("Product entry");
         assert!(entry_prod.plausible_type.contains("Modicon M340"));
         assert_eq!(entry_prod.confidence, 1.0);
     }
@@ -837,7 +892,11 @@ mod tests {
         };
         engine.ingest_dnp3_frame(&dnp3_frame, 1_000_000);
 
-        let dnp3_entry = engine.catalog.entries.get("DNP3:1:2:7681").expect("DNP3 entry");
+        let dnp3_entry = engine
+            .catalog
+            .entries
+            .get("DNP3:1:2:7681")
+            .expect("DNP3 entry");
         assert!(dnp3_entry.plausible_type.contains("Analog Input"));
         assert_eq!(dnp3_entry.confidence, 1.0);
 
@@ -853,7 +912,11 @@ mod tests {
         };
         engine.ingest_bacnet_frame(&bacnet_frame, 1_000_000);
 
-        let bac_entry = engine.catalog.entries.get("BACnet:5:10").expect("BACnet entry");
+        let bac_entry = engine
+            .catalog
+            .entries
+            .get("BACnet:5:10")
+            .expect("BACnet entry");
         assert!(bac_entry.plausible_type.contains("Token Pass"));
         assert_eq!(bac_entry.confidence, 1.0);
     }

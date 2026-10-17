@@ -115,10 +115,13 @@ pub fn dissect_uds(payload: &[u8]) -> Option<UdsMessage> {
         // 0x14: ClearDiagnosticInformation
         0x14 => {
             if payload.len() >= 4 {
-                let dtc = ((payload[1] as u32) << 16) | ((payload[2] as u32) << 8) | (payload[3] as u32);
+                let dtc =
+                    ((payload[1] as u32) << 16) | ((payload[2] as u32) << 8) | (payload[3] as u32);
                 Some(UdsMessage::ClearDiagnosticInformation { dtc_group: dtc })
             } else {
-                Some(UdsMessage::ClearDiagnosticInformation { dtc_group: 0xFFFFFF })
+                Some(UdsMessage::ClearDiagnosticInformation {
+                    dtc_group: 0xFFFFFF,
+                })
             }
         }
 

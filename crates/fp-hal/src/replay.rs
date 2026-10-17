@@ -62,7 +62,10 @@ impl ReplayInterface {
         inter_frame_gap_us: Option<u64>,
     ) -> Result<usize, HalError> {
         let params = {
-            let p = self.link_params.try_read().map_err(|_| HalError::Timeout("Lock contention".into()))?;
+            let p = self
+                .link_params
+                .try_read()
+                .map_err(|_| HalError::Timeout("Lock contention".into()))?;
             p.clone()
         };
         let chunk = TimestampedChunk::new(payload.to_vec(), inter_frame_gap_us);
@@ -78,7 +81,10 @@ impl ReplayInterface {
     /// Inject a synthetic CAN frame.
     pub fn inject_can_frame(&self, timestamp_us: u64, frame: CanFrame) -> Result<usize, HalError> {
         let params = {
-            let p = self.link_params.try_read().map_err(|_| HalError::Timeout("Lock contention".into()))?;
+            let p = self
+                .link_params
+                .try_read()
+                .map_err(|_| HalError::Timeout("Lock contention".into()))?;
             p.clone()
         };
         let event = RawBusEvent::new_can_rx(
@@ -97,7 +103,11 @@ impl ReplayInterface {
 
     /// Spawn an asynchronous task replaying a sequence of events into the broadcast channel.
     /// If real_time is true, pauses between events to match original arrival timings.
-    pub fn spawn_file_replay(&self, events: Vec<RawBusEvent>, real_time: bool) -> tokio::task::JoinHandle<()> {
+    pub fn spawn_file_replay(
+        &self,
+        events: Vec<RawBusEvent>,
+        real_time: bool,
+    ) -> tokio::task::JoinHandle<()> {
         let replay = self.clone();
         tokio::spawn(async move {
             let mut prev_ts: Option<u64> = None;
@@ -218,25 +228,60 @@ pub fn parse_pcapng_events(bytes: &[u8]) -> Result<Vec<RawBusEvent>, HalError> {
     let mut offset = 0;
 
     while offset + 8 <= bytes.len() {
-        let block_type = u32::from_le_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]]);
-        let block_len = u32::from_le_bytes([bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]]) as usize;
+        let block_type = u32::from_le_bytes([
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+        ]);
+        let block_len = u32::from_le_bytes([
+            bytes[offset + 4],
+            bytes[offset + 5],
+            bytes[offset + 6],
+            bytes[offset + 7],
+        ]) as usize;
         if block_len < 8 || offset + block_len > bytes.len() {
             break;
         }
 
         // EPB block type = 0x00000006
         if block_type == 0x00000006 && block_len >= 32 {
-            let if_id = u32::from_le_bytes([bytes[offset + 8], bytes[offset + 9], bytes[offset + 10], bytes[offset + 11]]);
-            let ts_high = u32::from_le_bytes([bytes[offset + 12], bytes[offset + 13], bytes[offset + 14], bytes[offset + 15]]);
-            let ts_low = u32::from_le_bytes([bytes[offset + 16], bytes[offset + 17], bytes[offset + 18], bytes[offset + 19]]);
+            let if_id = u32::from_le_bytes([
+                bytes[offset + 8],
+                bytes[offset + 9],
+                bytes[offset + 10],
+                bytes[offset + 11],
+            ]);
+            let ts_high = u32::from_le_bytes([
+                bytes[offset + 12],
+                bytes[offset + 13],
+                bytes[offset + 14],
+                bytes[offset + 15],
+            ]);
+            let ts_low = u32::from_le_bytes([
+                bytes[offset + 16],
+                bytes[offset + 17],
+                bytes[offset + 18],
+                bytes[offset + 19],
+            ]);
             let ts_us = ((ts_high as u64) << 32) | (ts_low as u64);
-            let cap_len = u32::from_le_bytes([bytes[offset + 20], bytes[offset + 21], bytes[offset + 22], bytes[offset + 23]]) as usize;
+            let cap_len = u32::from_le_bytes([
+                bytes[offset + 20],
+                bytes[offset + 21],
+                bytes[offset + 22],
+                bytes[offset + 23],
+            ]) as usize;
 
             if offset + 28 + cap_len <= offset + block_len {
                 let packet_data = &bytes[offset + 28..offset + 28 + cap_len];
                 if if_id == 0 && cap_len >= 8 {
                     // SocketCAN
-                    let can_id_raw = u32::from_be_bytes([packet_data[0], packet_data[1], packet_data[2], packet_data[3]]);
+                    let can_id_raw = u32::from_be_bytes([
+                        packet_data[0],
+                        packet_data[1],
+                        packet_data[2],
+                        packet_data[3],
+                    ]);
                     let dlc = (packet_data[4] as usize).min(cap_len.saturating_sub(8));
                     let is_eff = (can_id_raw & 0x80000000) != 0;
                     let is_rtr = (can_id_raw & 0x40000000) != 0;
@@ -411,9 +456,13 @@ fn hex_to_bytes(s: &str) -> Vec<u8> {
 
 /// Load replay events from a file (.pcapng, candump text log, or raw binary)
 pub fn load_replay_file(path: &str) -> Result<Vec<RawBusEvent>, HalError> {
-    let content = std::fs::read(path).map_err(|e| HalError::Io(format!("Failed to read replay file '{}': {}", path, e)))?;
+    let content = std::fs::read(path)
+        .map_err(|e| HalError::Io(format!("Failed to read replay file '{}': {}", path, e)))?;
 
-    if content.starts_with(&[0x0A, 0x0D, 0x0D, 0x0A]) || path.ends_with(".pcapng") || path.ends_with(".pcap") {
+    if content.starts_with(&[0x0A, 0x0D, 0x0D, 0x0A])
+        || path.ends_with(".pcapng")
+        || path.ends_with(".pcap")
+    {
         return parse_pcapng_events(&content);
     }
 
@@ -485,7 +534,10 @@ mod tests {
     #[tokio::test]
     async fn test_elevated_tier_with_valid_permit_allows_tx() {
         let mut replay = ReplayInterface::new("vbus1", 16);
-        replay.set_safety_tier(SafetyTier::ReadOnlyProbe).await.unwrap();
+        replay
+            .set_safety_tier(SafetyTier::ReadOnlyProbe)
+            .await
+            .unwrap();
 
         let now = Utc::now();
         let permit = SafetyPermit::new(
@@ -497,7 +549,10 @@ mod tests {
         );
 
         let frame = OutboundFrame::Serial(Bytes::from_static(b"\x01\x03\x00\x00\x00\x01\x84\x0A"));
-        replay.transmit(frame.clone(), &permit).await.expect("Transmit should succeed");
+        replay
+            .transmit(frame.clone(), &permit)
+            .await
+            .expect("Transmit should succeed");
 
         let history = replay.get_transmitted().await;
         assert_eq!(history.len(), 1);
@@ -507,7 +562,10 @@ mod tests {
     #[tokio::test]
     async fn test_expired_permit_is_rejected() {
         let mut replay = ReplayInterface::new("vbus2", 16);
-        replay.set_safety_tier(SafetyTier::ReadOnlyProbe).await.unwrap();
+        replay
+            .set_safety_tier(SafetyTier::ReadOnlyProbe)
+            .await
+            .unwrap();
 
         let now = Utc::now();
         let expired_permit = SafetyPermit::new(
@@ -535,10 +593,13 @@ mod tests {
 
         // Inject Modbus query
         let modbus_req = [0x01, 0x03, 0x00, 0x6B, 0x00, 0x03, 0x74, 0x17];
-        replay.inject_modbus_rtu(1000, &modbus_req, Some(3500)).unwrap();
+        replay
+            .inject_modbus_rtu(1000, &modbus_req, Some(3500))
+            .unwrap();
 
         // Inject CAN frame
-        let can_frame = CanFrame::new_standard(0x7DF, &[0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        let can_frame =
+            CanFrame::new_standard(0x7DF, &[0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
         replay.inject_can_frame(2500, can_frame).unwrap();
 
         let ev1 = rx.recv().await.unwrap();
@@ -563,7 +624,10 @@ mod tests {
     #[tokio::test]
     async fn test_out_of_scope_permit_is_rejected() {
         let mut replay = ReplayInterface::new("vbus_scope", 16);
-        replay.set_safety_tier(SafetyTier::ReadOnlyProbe).await.unwrap();
+        replay
+            .set_safety_tier(SafetyTier::ReadOnlyProbe)
+            .await
+            .unwrap();
 
         let permit_scoped = SafetyPermit::new(
             "p_can_only",
@@ -575,12 +639,17 @@ mod tests {
 
         // Frame targeting CAN 0x123 violates scope "CAN:0x7E0"
         let can_frame = CanFrame::new_standard(0x123, &[0x00]);
-        let result = replay.transmit(OutboundFrame::Can(can_frame), &permit_scoped).await;
+        let result = replay
+            .transmit(OutboundFrame::Can(can_frame), &permit_scoped)
+            .await;
         assert!(matches!(result, Err(HalError::InvalidPermit(_))));
 
         // Frame targeting CAN 0x7E0 satisfies scope
         let valid_frame = CanFrame::new_standard(0x7E0, &[0x02, 0x10, 0x01]);
-        assert!(replay.transmit(OutboundFrame::Can(valid_frame), &permit_scoped).await.is_ok());
+        assert!(replay
+            .transmit(OutboundFrame::Can(valid_frame), &permit_scoped)
+            .await
+            .is_ok());
     }
 
     #[test]
@@ -606,7 +675,10 @@ mod tests {
         let (_, frame) = parse_candump_line(line).expect("Parsed candump line");
         assert_eq!(frame.id, CanId::Standard(0x7DF));
         assert_eq!(frame.dlc, 8);
-        assert_eq!(frame.data.as_ref(), &[0x02, 0x01, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(
+            frame.data.as_ref(),
+            &[0x02, 0x01, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00]
+        );
     }
 
     #[test]

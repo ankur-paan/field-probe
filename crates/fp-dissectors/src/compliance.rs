@@ -59,8 +59,14 @@ impl ComplianceReport {
         self.total_frames_analyzed += 1;
 
         match &adu.pdu {
-            ModbusPdu::ReadHoldingRegistersQuery { start_addr, quantity }
-            | ModbusPdu::ReadInputRegistersQuery { start_addr, quantity } => {
+            ModbusPdu::ReadHoldingRegistersQuery {
+                start_addr,
+                quantity,
+            }
+            | ModbusPdu::ReadInputRegistersQuery {
+                start_addr,
+                quantity,
+            } => {
                 // MODBUS-003: Max register quantity is 125 (0x7D)
                 if *quantity == 0 || *quantity > 125 {
                     self.add_issue(ComplianceIssue {
@@ -70,7 +76,10 @@ impl ComplianceReport {
                             "Register query quantity {} is invalid (must be 1..125)",
                             quantity
                         ),
-                        physical_hint: Some("Client requested excessive registers exceeding Modbus PDU limit.".into()),
+                        physical_hint: Some(
+                            "Client requested excessive registers exceeding Modbus PDU limit."
+                                .into(),
+                        ),
                     });
                 }
 
@@ -88,8 +97,14 @@ impl ComplianceReport {
                 }
             }
 
-            ModbusPdu::ReadCoilsQuery { start_addr, quantity }
-            | ModbusPdu::ReadDiscreteInputsQuery { start_addr, quantity } => {
+            ModbusPdu::ReadCoilsQuery {
+                start_addr,
+                quantity,
+            }
+            | ModbusPdu::ReadDiscreteInputsQuery {
+                start_addr,
+                quantity,
+            } => {
                 // MODBUS-003: Max coil quantity is 2000 (0x07D0)
                 if *quantity == 0 || *quantity > 2000 {
                     self.add_issue(ComplianceIssue {
@@ -99,7 +114,9 @@ impl ComplianceReport {
                             "Coil query quantity {} is invalid (must be 1..2000)",
                             quantity
                         ),
-                        physical_hint: Some("Client requested excessive coils exceeding Modbus PDU limit.".into()),
+                        physical_hint: Some(
+                            "Client requested excessive coils exceeding Modbus PDU limit.".into(),
+                        ),
                     });
                 }
 
@@ -116,7 +133,11 @@ impl ComplianceReport {
                 }
             }
 
-            ModbusPdu::ReadResponse { function_code, byte_count, data } => {
+            ModbusPdu::ReadResponse {
+                function_code,
+                byte_count,
+                data,
+            } => {
                 // MODBUS-002: Byte count consistency
                 if *byte_count as usize != data.len() {
                     self.add_issue(ComplianceIssue {
@@ -131,11 +152,14 @@ impl ComplianceReport {
                 }
             }
 
-            ModbusPdu::Exception { original_fc, exception_code, raw_code } => {
+            ModbusPdu::Exception {
+                original_fc,
+                exception_code,
+                raw_code,
+            } => {
                 let severity = match exception_code {
-                    ModbusExceptionCode::ServerDeviceFailure | ModbusExceptionCode::MemoryParityError => {
-                        ViolationSeverity::Critical
-                    }
+                    ModbusExceptionCode::ServerDeviceFailure
+                    | ModbusExceptionCode::MemoryParityError => ViolationSeverity::Critical,
                     _ => ViolationSeverity::Warning,
                 };
                 self.add_issue(ComplianceIssue {
@@ -143,15 +167,16 @@ impl ComplianceReport {
                     rule_id: "MODBUS-005-EXCEPTION-RESPONSE".into(),
                     description: format!(
                         "Slave 0x{:02X} returned Exception 0x{:02X} ({}) for FC 0x{:02X}",
-                        adu.slave_id, raw_code, exception_code.name(), original_fc
+                        adu.slave_id,
+                        raw_code,
+                        exception_code.name(),
+                        original_fc
                     ),
                     physical_hint: Some(exception_code.description().to_string()),
                 });
             }
 
-            ModbusPdu::WriteSingleCoil { addr, value }
-                if *value != 0x0000 && *value != 0xFF00 =>
-            {
+            ModbusPdu::WriteSingleCoil { addr, value } if *value != 0x0000 && *value != 0xFF00 => {
                 self.add_issue(ComplianceIssue {
                     severity: ViolationSeverity::Warning,
                     rule_id: "MODBUS-006-ILLEGAL-COIL-VALUE".into(),
@@ -159,7 +184,10 @@ impl ComplianceReport {
                         "Write coil at {} has invalid value 0x{:04X} (must be 0x0000 or 0xFF00)",
                         addr, value
                     ),
-                    physical_hint: Some("Modbus standard mandates only 0x0000 or 0xFF00 for single coil write.".into()),
+                    physical_hint: Some(
+                        "Modbus standard mandates only 0x0000 or 0xFF00 for single coil write."
+                            .into(),
+                    ),
                 });
             }
 
@@ -187,7 +215,10 @@ impl ComplianceReport {
                 severity: ViolationSeverity::Critical,
                 rule_id: "CAN-001-CRC-ERROR".into(),
                 description: "CAN hardware CRC checksum error detected on interface".into(),
-                physical_hint: Some("Electrical noise, improper cable termination, or transceiver distortion.".into()),
+                physical_hint: Some(
+                    "Electrical noise, improper cable termination, or transceiver distortion."
+                        .into(),
+                ),
             });
         }
 
@@ -195,8 +226,11 @@ impl ComplianceReport {
             self.add_issue(ComplianceIssue {
                 severity: ViolationSeverity::Critical,
                 rule_id: "CAN-002-STUFF-ERROR".into(),
-                description: "CAN bit stuffing rule violation (>5 identical consecutive bits)".into(),
-                physical_hint: Some("Severe clock drift, bus reflection, or faulty physical transceiver.".into()),
+                description: "CAN bit stuffing rule violation (>5 identical consecutive bits)"
+                    .into(),
+                physical_hint: Some(
+                    "Severe clock drift, bus reflection, or faulty physical transceiver.".into(),
+                ),
             });
         }
 
@@ -205,7 +239,9 @@ impl ComplianceReport {
                 severity: ViolationSeverity::Warning,
                 rule_id: "CAN-003-PHYSICAL-ERROR".into(),
                 description: "CAN framing or bit monitoring error on transmission/reception".into(),
-                physical_hint: Some("Differential signal integrity degraded or bus contention.".into()),
+                physical_hint: Some(
+                    "Differential signal integrity degraded or bus contention.".into(),
+                ),
             });
         }
 
@@ -214,7 +250,9 @@ impl ComplianceReport {
                 severity: ViolationSeverity::Warning,
                 rule_id: "CAN-004-ACK-DELIMITER".into(),
                 description: "CAN frame unacknowledged by any node on the bus".into(),
-                physical_hint: Some("Isolated node, disconnected termination, or baud rate mismatch.".into()),
+                physical_hint: Some(
+                    "Isolated node, disconnected termination, or baud rate mismatch.".into(),
+                ),
             });
         }
 
@@ -224,7 +262,10 @@ impl ComplianceReport {
                     severity: ViolationSeverity::Critical,
                     rule_id: "CAN-005-ERROR-FRAME".into(),
                     description: "Active/passive error frame received from CAN controller".into(),
-                    physical_hint: Some("Node entered Error-Passive or Bus-Off state due to repeated faults.".into()),
+                    physical_hint: Some(
+                        "Node entered Error-Passive or Bus-Off state due to repeated faults."
+                            .into(),
+                    ),
                 });
             }
         }
@@ -236,7 +277,10 @@ impl ComplianceReport {
                 severity: ViolationSeverity::Critical,
                 rule_id: "UART-001-FRAMING-ERROR".into(),
                 description: "UART stop bit framing error detected".into(),
-                physical_hint: Some("Baud rate mismatch or severe RS-485 slew rate / line capacitance distortion.".into()),
+                physical_hint: Some(
+                    "Baud rate mismatch or severe RS-485 slew rate / line capacitance distortion."
+                        .into(),
+                ),
             });
         }
 
@@ -246,7 +290,10 @@ impl ComplianceReport {
                 severity: ViolationSeverity::Critical,
                 rule_id: "UART-002-PARITY-ERROR".into(),
                 description: "UART parity check failed on received byte".into(),
-                physical_hint: Some("Parity configuration (None/Even/Odd) mismatch or single-bit noise spike.".into()),
+                physical_hint: Some(
+                    "Parity configuration (None/Even/Odd) mismatch or single-bit noise spike."
+                        .into(),
+                ),
             });
         }
 
@@ -357,12 +404,8 @@ mod tests {
         let mut error_frame = CanFrame::new_standard(0x000, &[]);
         error_frame.is_error = true;
 
-        let mut event = RawBusEvent::new_can_rx(
-            "can0",
-            1_000_000,
-            LinkParams::default(),
-            error_frame,
-        );
+        let mut event =
+            RawBusEvent::new_can_rx("can0", 1_000_000, LinkParams::default(), error_frame);
         event.error_flags = BusErrorFlags {
             can_crc_error: true,
             ..Default::default()

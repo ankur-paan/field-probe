@@ -61,9 +61,9 @@ impl SerialDriver {
     /// Ingest a newly arrived serial chunk, calculating inter-chunk gap via Instant
     pub fn ingest_chunk(&mut self, data: &[u8], timestamp_us: u64) {
         let now_instant = Instant::now();
-        let inter_frame_gap_us = self.last_chunk_instant.map(|prev| {
-            now_instant.duration_since(prev).as_micros() as u64
-        });
+        let inter_frame_gap_us = self
+            .last_chunk_instant
+            .map(|prev| now_instant.duration_since(prev).as_micros() as u64);
         self.last_chunk_instant = Some(now_instant);
 
         let chunk = TimestampedChunk::new(bytes::Bytes::copy_from_slice(data), inter_frame_gap_us);
@@ -108,13 +108,15 @@ impl SerialDriver {
                     Ok(0) => break,
                     Ok(n) => {
                         let now_instant = Instant::now();
-                        let gap = last_instant.map(|prev| now_instant.duration_since(prev).as_micros() as u64);
+                        let gap = last_instant
+                            .map(|prev| now_instant.duration_since(prev).as_micros() as u64);
                         last_instant = Some(now_instant);
 
                         let now_utc = chrono::Utc::now();
                         let timestamp_us = now_utc.timestamp_micros().max(0) as u64;
 
-                        let chunk = TimestampedChunk::new(bytes::Bytes::copy_from_slice(&buf[..n]), gap);
+                        let chunk =
+                            TimestampedChunk::new(bytes::Bytes::copy_from_slice(&buf[..n]), gap);
                         let event = RawBusEvent::new_serial_rx(
                             &port_name,
                             timestamp_us,
@@ -143,7 +145,9 @@ impl BusInterface for SerialDriver {
     async fn set_link_params(&mut self, params: &LinkParams) -> Result<(), HalError> {
         match params {
             LinkParams::Serial(s) => self.configure(s),
-            _ => Err(HalError::UnsupportedParameters("Serial driver expects LinkParams::Serial".into())),
+            _ => Err(HalError::UnsupportedParameters(
+                "Serial driver expects LinkParams::Serial".into(),
+            )),
         }
     }
 
@@ -206,7 +210,9 @@ impl BusInterface for SerialDriver {
                 let _ = self.tx_sender.send(event);
                 Ok(())
             }
-            OutboundFrame::Can(_) => Err(HalError::Io("Serial driver only accepts Serial outbound frames".to_string())),
+            OutboundFrame::Can(_) => Err(HalError::Io(
+                "Serial driver only accepts Serial outbound frames".to_string(),
+            )),
         }
     }
 }
@@ -236,12 +242,20 @@ mod tests {
             None,
         );
 
-        let outbound = OutboundFrame::Serial(bytes::Bytes::from_static(&[0x01, 0x03, 0x00, 0x00, 0x00, 0x02, 0xC4, 0x0B]));
-        let err = driver.transmit(outbound.clone(), &permit).await.unwrap_err();
+        let outbound = OutboundFrame::Serial(bytes::Bytes::from_static(&[
+            0x01, 0x03, 0x00, 0x00, 0x00, 0x02, 0xC4, 0x0B,
+        ]));
+        let err = driver
+            .transmit(outbound.clone(), &permit)
+            .await
+            .unwrap_err();
         assert!(matches!(err, HalError::SafetyViolation { .. }));
 
         // Elevated tier with permit allows transmit and asserts RTS/DTR
-        driver.set_safety_tier(SafetyTier::ReadOnlyProbe).await.unwrap();
+        driver
+            .set_safety_tier(SafetyTier::ReadOnlyProbe)
+            .await
+            .unwrap();
         assert!(driver.rts_asserted);
         assert!(driver.dtr_asserted);
 

@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::crc::{
-    bacnet_crc8, modbus_ascii_lrc, verify_dnp3_crc16, verify_modbus_rtu_crc16,
-};
+use crate::crc::{bacnet_crc8, modbus_ascii_lrc, verify_dnp3_crc16, verify_modbus_rtu_crc16};
 
 /// Candidate serial protocol detected on the bus
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -15,9 +13,7 @@ pub enum SerialProtocolCandidate {
 }
 
 /// Standard baud rates evaluated during auto-detection scan
-pub const CANDIDATE_BAUD_RATES: [u32; 8] = [
-    9600, 19200, 38400, 57600, 115200, 230400, 4800, 2400,
-];
+pub const CANDIDATE_BAUD_RATES: [u32; 8] = [9600, 19200, 38400, 57600, 115200, 230400, 4800, 2400];
 
 pub use fp_core::params::{calculate_silence_intervals, SerialSilenceIntervals};
 
@@ -233,7 +229,10 @@ pub fn score_serial_stream(buffer: &[u8], baud_rate: u32) -> SerialDetectionScor
         baud_rate,
         confidence,
         valid_crc_count: best_count,
-        total_frames_scanned: rtu_matches.len() + ascii_matches.len() + mstp_matches.len() + dnp3_matches.len(),
+        total_frames_scanned: rtu_matches.len()
+            + ascii_matches.len()
+            + mstp_matches.len()
+            + dnp3_matches.len(),
         unknown_hypothesis,
     }
 }
@@ -315,8 +314,8 @@ mod tests {
     #[test]
     fn test_score_serial_stream() {
         let stream = vec![
-            0x01, 0x03, 0x00, 0x00, 0x00, 0x01, 0x84, 0x0A,
-            0x01, 0x03, 0x02, 0x00, 0x64, 0xB9, 0xAF,
+            0x01, 0x03, 0x00, 0x00, 0x00, 0x01, 0x84, 0x0A, 0x01, 0x03, 0x02, 0x00, 0x64, 0xB9,
+            0xAF,
         ];
         let score = score_serial_stream(&stream, 9600);
         assert_eq!(score.candidate_protocol, SerialProtocolCandidate::ModbusRtu);
@@ -328,7 +327,10 @@ mod tests {
     fn test_score_serial_stream_modbus_ascii() {
         let stream = b"NOISE:010300000001FB\r\nTRAILING";
         let score = score_serial_stream(stream, 19200);
-        assert_eq!(score.candidate_protocol, SerialProtocolCandidate::ModbusAscii);
+        assert_eq!(
+            score.candidate_protocol,
+            SerialProtocolCandidate::ModbusAscii
+        );
         assert_eq!(score.valid_crc_count, 1);
         assert!(score.confidence > 0.3);
     }

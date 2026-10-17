@@ -17,6 +17,4 @@ pub use serial_hunter::{
     scan_modbus_ascii_frames, scan_modbus_rtu_frames, score_serial_stream, SerialDetectionScore,
     SerialProtocolCandidate, SerialSilenceIntervals, CANDIDATE_BAUD_RATES,
 };
-pub use unknown_framer::{
-    FieldType, FrameStructureHypothesis, InferredField, UnknownFramer,
-};
+pub use unknown_framer::{FieldType, FrameStructureHypothesis, InferredField, UnknownFramer};

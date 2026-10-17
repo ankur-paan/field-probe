@@ -229,7 +229,10 @@ async fn test_fp_server_audit_and_export_endpoints() {
 
     let mut pcap_response = Vec::new();
     stream.read_to_end(&mut pcap_response).await.unwrap();
-    let header_end = pcap_response.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let header_end = pcap_response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap();
     let header_str = String::from_utf8_lossy(&pcap_response[..header_end]);
     assert!(header_str.contains("HTTP/1.1 200 OK"));
     assert!(header_str.contains("Content-Type: application/vnd.tcpdump.pcap"));
@@ -252,4 +255,3 @@ async fn test_fp_server_audit_and_export_endpoints() {
 
     server_handle.abort();
 }
-

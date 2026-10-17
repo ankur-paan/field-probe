@@ -133,7 +133,9 @@ impl IsoTpReassembler {
 
                 let remaining = session.total_length.saturating_sub(session.payload.len());
                 let bytes_in_frame = (data.len() - 1).min(remaining);
-                session.payload.extend_from_slice(&data[1..1 + bytes_in_frame]);
+                session
+                    .payload
+                    .extend_from_slice(&data[1..1 + bytes_in_frame]);
 
                 if session.payload.len() >= session.total_length {
                     if let Some(completed) = self.sessions.remove(&id) {
@@ -167,7 +169,9 @@ mod tests {
         let id = CanId::Standard(0x7E8);
         // SF with 3 bytes: 0x03, 0x22, 0xF1, 0x90
         let frame = [0x03, 0x22, 0xF1, 0x90, 0xAA, 0xAA, 0xAA, 0xAA];
-        let pdu = reassembler.ingest_frame(id, &frame, 1000).expect("Complete PDU");
+        let pdu = reassembler
+            .ingest_frame(id, &frame, 1000)
+            .expect("Complete PDU");
         assert_eq!(pdu.unwrap(), vec![0x22, 0xF1, 0x90]);
     }
 
@@ -186,7 +190,9 @@ mod tests {
 
         // Consecutive Frame 2: SN = 2 -> [0x22, d13, 0xAA, ...]
         let cf2 = [0x22, 0x31, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA];
-        let res = reassembler.ingest_frame(id, &cf2, 3000).expect("Completed multi-frame");
+        let res = reassembler
+            .ingest_frame(id, &cf2, 3000)
+            .expect("Completed multi-frame");
         let pdu = res.unwrap();
 
         assert_eq!(pdu.len(), 14);
@@ -204,7 +210,15 @@ mod tests {
 
         // Wrong sequence number (expected 1, got 3)
         let cf_wrong = [0x23, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D];
-        let res = reassembler.ingest_frame(id, &cf_wrong, 2000).expect("Error returned");
-        assert_eq!(res.unwrap_err(), IsoTpError::SequenceMismatch { expected: 1, got: 3 });
+        let res = reassembler
+            .ingest_frame(id, &cf_wrong, 2000)
+            .expect("Error returned");
+        assert_eq!(
+            res.unwrap_err(),
+            IsoTpError::SequenceMismatch {
+                expected: 1,
+                got: 3
+            }
+        );
     }
 }

@@ -119,9 +119,7 @@ impl UnknownFramer {
             }
         }
 
-        let (&modal_len, &count) = length_counts
-            .iter()
-            .max_by_key(|&(_, count)| count)?;
+        let (&modal_len, &count) = length_counts.iter().max_by_key(|&(_, count)| count)?;
 
         if count < self.min_frames_required {
             return None;
@@ -234,7 +232,11 @@ impl UnknownFramer {
 
             let len = end - curr_start;
             let avg_entropy: f32 = col_entropy[curr_start..end].iter().sum::<f32>() / (len as f32);
-            let max_distinct = col_distinct[curr_start..end].iter().copied().max().unwrap_or(1);
+            let max_distinct = col_distinct[curr_start..end]
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(1);
 
             let description = match curr_type {
                 FieldType::SyncPreamble => {
@@ -251,7 +253,10 @@ impl UnknownFramer {
                     "Monotonic Rolling Counter (b_n = b_{n-1} + 1 mod 256)".to_string()
                 }
                 FieldType::TelemetryPayload => {
-                    format!("Variable Payload ({} bytes, H={:.2} bits/byte)", len, avg_entropy)
+                    format!(
+                        "Variable Payload ({} bytes, H={:.2} bits/byte)",
+                        len, avg_entropy
+                    )
                 }
                 FieldType::ChecksumOrCrc => {
                     if let Some(ref crc) = detected_crc {
@@ -276,17 +281,26 @@ impl UnknownFramer {
 
         // Compute overall hypothesis confidence
         let mut confidence = 0.5f32;
-        if fields.iter().any(|f| f.field_type == FieldType::SyncPreamble) {
+        if fields
+            .iter()
+            .any(|f| f.field_type == FieldType::SyncPreamble)
+        {
             confidence += 0.20;
         }
-        if fields.iter().any(|f| f.field_type == FieldType::SequenceCounter) {
+        if fields
+            .iter()
+            .any(|f| f.field_type == FieldType::SequenceCounter)
+        {
             confidence += 0.15;
         }
         if detected_crc.is_some() {
             confidence += 0.15;
         }
 
-        let sample_preamble = if let Some(preamble_field) = fields.first().filter(|f| f.field_type == FieldType::SyncPreamble) {
+        let sample_preamble = if let Some(preamble_field) = fields
+            .first()
+            .filter(|f| f.field_type == FieldType::SyncPreamble)
+        {
             matrix[0][0..preamble_field.length].to_vec()
         } else {
             Vec::new()
@@ -303,7 +317,10 @@ impl UnknownFramer {
     }
 
     /// Full pipeline: Cluster incoming chunks by silence and infer the frame layout
-    pub fn reverse_engineer_stream(&self, chunks: &[TimestampedChunk]) -> Option<FrameStructureHypothesis> {
+    pub fn reverse_engineer_stream(
+        &self,
+        chunks: &[TimestampedChunk],
+    ) -> Option<FrameStructureHypothesis> {
         let frames = self.cluster_by_silence(chunks);
         self.analyze_frame_matrix(&frames)
     }
@@ -355,7 +372,9 @@ fn detect_trailing_checksum(matrix: &[&[u8]]) -> Option<CrcMatchResult> {
 
     // 1. Check 8-bit Additive Sum (sum of 0..len-1 % 256 == last byte)
     let sum_matched = matrix.iter().all(|row| {
-        let sum: u8 = row[..len - 1].iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
+        let sum: u8 = row[..len - 1]
+            .iter()
+            .fold(0u8, |acc, &b| acc.wrapping_add(b));
         sum == row[len - 1]
     });
     if sum_matched {
@@ -378,9 +397,9 @@ fn detect_trailing_checksum(matrix: &[&[u8]]) -> Option<CrcMatchResult> {
     }
 
     // 3. Check Modbus RTU CRC-16 (reflected 0xA001)
-    let modbus_crc_matched = matrix.iter().all(|row| {
-        crate::crc::verify_modbus_rtu_crc16(row)
-    });
+    let modbus_crc_matched = matrix
+        .iter()
+        .all(|row| crate::crc::verify_modbus_rtu_crc16(row));
     if modbus_crc_matched {
         return Some(CrcMatchResult {
             name: "CRC-16/Modbus (0xA001)".to_string(),

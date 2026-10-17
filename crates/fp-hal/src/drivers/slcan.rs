@@ -9,7 +9,9 @@ pub struct SlcanCodec {
 
 impl SlcanCodec {
     pub fn new() -> Self {
-        Self { buffer: Vec::with_capacity(256) }
+        Self {
+            buffer: Vec::with_capacity(256),
+        }
     }
 
     /// Feed incoming bytes from serial stream and extract parsed CanFrames
@@ -51,8 +53,10 @@ impl SlcanCodec {
                 let id_raw = u32::from_str_radix(id_str, 16)
                     .map_err(|_| HalError::Io("Invalid hex ID".to_string()))?;
 
-                let dlc = (line[4] as char).to_digit(10)
-                    .ok_or_else(|| HalError::Io("Invalid DLC".to_string()))? as usize;
+                let dlc = (line[4] as char)
+                    .to_digit(10)
+                    .ok_or_else(|| HalError::Io("Invalid DLC".to_string()))?
+                    as usize;
 
                 if dlc > 8 || line.len() < 5 + dlc * 2 {
                     return Err(HalError::Io("Mismatched DLC and data length".to_string()));
@@ -80,8 +84,10 @@ impl SlcanCodec {
                 let id_raw = u32::from_str_radix(id_str, 16)
                     .map_err(|_| HalError::Io("Invalid hex ext ID".to_string()))?;
 
-                let dlc = (line[9] as char).to_digit(10)
-                    .ok_or_else(|| HalError::Io("Invalid DLC".to_string()))? as usize;
+                let dlc = (line[9] as char)
+                    .to_digit(10)
+                    .ok_or_else(|| HalError::Io("Invalid DLC".to_string()))?
+                    as usize;
 
                 if dlc > 8 || line.len() < 10 + dlc * 2 {
                     return Err(HalError::Io("Mismatched DLC and data length".to_string()));
@@ -108,8 +114,10 @@ impl SlcanCodec {
                     .map_err(|_| HalError::Io("Non-UTF8 ID".to_string()))?;
                 let id_raw = u32::from_str_radix(id_str, 16)
                     .map_err(|_| HalError::Io("Invalid hex ID".to_string()))?;
-                let dlc = (line[4] as char).to_digit(10)
-                    .ok_or_else(|| HalError::Io("Invalid DLC".to_string()))? as u8;
+                let dlc = (line[4] as char)
+                    .to_digit(10)
+                    .ok_or_else(|| HalError::Io("Invalid DLC".to_string()))?
+                    as u8;
 
                 Ok(CanFrame::new_standard_rtr(id_raw as u16, dlc))
             }
@@ -122,8 +130,10 @@ impl SlcanCodec {
                     .map_err(|_| HalError::Io("Non-UTF8 ext ID".to_string()))?;
                 let id_raw = u32::from_str_radix(id_str, 16)
                     .map_err(|_| HalError::Io("Invalid hex ext ID".to_string()))?;
-                let dlc = (line[9] as char).to_digit(10)
-                    .ok_or_else(|| HalError::Io("Invalid DLC".to_string()))? as u8;
+                let dlc = (line[9] as char)
+                    .to_digit(10)
+                    .ok_or_else(|| HalError::Io("Invalid DLC".to_string()))?
+                    as u8;
 
                 Ok(CanFrame::new_extended_rtr(id_raw, dlc))
             }
@@ -136,12 +146,16 @@ impl SlcanCodec {
                     .map_err(|_| HalError::Io("Non-UTF8 ID".to_string()))?;
                 let id_raw = u32::from_str_radix(id_str, 16)
                     .map_err(|_| HalError::Io("Invalid hex ID".to_string()))?;
-                let dlc = (line[4] as char).to_digit(16)
-                    .ok_or_else(|| HalError::Io("Invalid DLC".to_string()))? as usize;
+                let dlc = (line[4] as char)
+                    .to_digit(16)
+                    .ok_or_else(|| HalError::Io("Invalid DLC".to_string()))?
+                    as usize;
                 let byte_len = dlc_to_byte_len(dlc);
 
                 if line.len() < 5 + byte_len * 2 {
-                    return Err(HalError::Io("Mismatched CAN-FD DLC and data length".to_string()));
+                    return Err(HalError::Io(
+                        "Mismatched CAN-FD DLC and data length".to_string(),
+                    ));
                 }
 
                 let mut data = Vec::with_capacity(byte_len);
@@ -165,12 +179,16 @@ impl SlcanCodec {
                     .map_err(|_| HalError::Io("Non-UTF8 ext ID".to_string()))?;
                 let id_raw = u32::from_str_radix(id_str, 16)
                     .map_err(|_| HalError::Io("Invalid hex ext ID".to_string()))?;
-                let dlc = (line[9] as char).to_digit(16)
-                    .ok_or_else(|| HalError::Io("Invalid DLC".to_string()))? as usize;
+                let dlc = (line[9] as char)
+                    .to_digit(16)
+                    .ok_or_else(|| HalError::Io("Invalid DLC".to_string()))?
+                    as usize;
                 let byte_len = dlc_to_byte_len(dlc);
 
                 if line.len() < 10 + byte_len * 2 {
-                    return Err(HalError::Io("Mismatched CAN-FD DLC and data length".to_string()));
+                    return Err(HalError::Io(
+                        "Mismatched CAN-FD DLC and data length".to_string(),
+                    ));
                 }
 
                 let mut data = Vec::with_capacity(byte_len);
@@ -185,7 +203,10 @@ impl SlcanCodec {
 
                 Ok(CanFrame::new_extended_fd(id_raw, &data))
             }
-            _ => Err(HalError::Io(format!("Unsupported SLCAN command: {}", cmd as char))),
+            _ => Err(HalError::Io(format!(
+                "Unsupported SLCAN command: {}",
+                cmd as char
+            ))),
         }
     }
 
@@ -280,7 +301,11 @@ impl SlcanCodec {
             "O\r" // Open in normal mode (TX allowed)
         };
 
-        vec!["C\r".to_string(), speed_cmd.to_string(), open_cmd.to_string()]
+        vec![
+            "C\r".to_string(),
+            speed_cmd.to_string(),
+            open_cmd.to_string(),
+        ]
     }
 }
 
@@ -298,10 +323,10 @@ fn dlc_to_byte_len(dlc: usize) -> usize {
     }
 }
 
+use crate::interface::BusInterface;
 use async_trait::async_trait;
 use fp_core::{AdapterCapabilities, IndustrialChip, LinkParams, OutboundFrame, RawBusEvent};
 use tokio::sync::broadcast;
-use crate::interface::BusInterface;
 
 /// Asynchronous SLCAN serial hardware driver implementing BusInterface.
 /// Defaults to Tier-0 PassiveListenOnly with hardware command `L\r`.
@@ -327,7 +352,9 @@ impl SlcanDriver {
             supports_can_fd: true,
             supports_listen_only: true,
             supported_baud_rates: vec![115200, 230400, 921600],
-            supported_can_bitrates: vec![10_000, 20_000, 50_000, 100_000, 125_000, 250_000, 500_000, 800_000, 1_000_000],
+            supported_can_bitrates: vec![
+                10_000, 20_000, 50_000, 100_000, 125_000, 250_000, 500_000, 800_000, 1_000_000,
+            ],
             usb_vid: Some(0x0403),
             usb_pid: Some(0x6001),
             serial_number: Some("CANUSB-001".to_string()),
@@ -418,7 +445,10 @@ impl BusInterface for SlcanDriver {
     async fn set_link_params(&mut self, params: &LinkParams) -> Result<(), HalError> {
         self.link_params = params.clone();
         if let LinkParams::Can(can_params) = params {
-            self.connect_commands = SlcanCodec::init_commands(can_params.bitrate, self.tier == SafetyTier::PassiveListenOnly);
+            self.connect_commands = SlcanCodec::init_commands(
+                can_params.bitrate,
+                self.tier == SafetyTier::PassiveListenOnly,
+            );
         }
         Ok(())
     }
@@ -429,7 +459,8 @@ impl BusInterface for SlcanDriver {
             LinkParams::Can(can_params) => can_params.bitrate,
             _ => 500_000,
         };
-        self.connect_commands = SlcanCodec::init_commands(bitrate, tier == SafetyTier::PassiveListenOnly);
+        self.connect_commands =
+            SlcanCodec::init_commands(bitrate, tier == SafetyTier::PassiveListenOnly);
         Ok(())
     }
 
@@ -468,7 +499,9 @@ impl BusInterface for SlcanDriver {
                 let _ = self.tx_sender.send(event);
                 Ok(())
             }
-            OutboundFrame::Serial(_) => Err(HalError::Io("SLCAN driver only accepts CAN outbound frames".to_string())),
+            OutboundFrame::Serial(_) => Err(HalError::Io(
+                "SLCAN driver only accepts CAN outbound frames".to_string(),
+            )),
         }
     }
 }
@@ -513,7 +546,8 @@ mod tests {
             SafetyTier::PassiveListenOnly,
             &permit,
             chrono::Utc::now(),
-        ).unwrap_err();
+        )
+        .unwrap_err();
 
         assert!(matches!(err, HalError::SafetyViolation { .. }));
     }
@@ -541,7 +575,13 @@ mod tests {
             chrono::Utc::now() + chrono::Duration::minutes(5),
             None,
         );
-        let encoded_std = SlcanCodec::encode_frame(&frame_std, SafetyTier::ReadOnlyProbe, &permit, chrono::Utc::now()).unwrap();
+        let encoded_std = SlcanCodec::encode_frame(
+            &frame_std,
+            SafetyTier::ReadOnlyProbe,
+            &permit,
+            chrono::Utc::now(),
+        )
+        .unwrap();
         assert_eq!(encoded_std, "r1234\r");
 
         // Extended RTR
@@ -551,7 +591,13 @@ mod tests {
         assert_eq!(frame_ext.dlc, 8);
         assert!(frame_ext.is_rtr);
 
-        let encoded_ext = SlcanCodec::encode_frame(&frame_ext, SafetyTier::ReadOnlyProbe, &permit, chrono::Utc::now()).unwrap();
+        let encoded_ext = SlcanCodec::encode_frame(
+            &frame_ext,
+            SafetyTier::ReadOnlyProbe,
+            &permit,
+            chrono::Utc::now(),
+        )
+        .unwrap();
         assert_eq!(encoded_ext, "R000004568\r");
     }
 
@@ -571,7 +617,13 @@ mod tests {
             chrono::Utc::now() + chrono::Duration::minutes(5),
             None,
         );
-        let encoded_std = SlcanCodec::encode_frame(&frame_std, SafetyTier::ReadOnlyProbe, &permit, chrono::Utc::now()).unwrap();
+        let encoded_std = SlcanCodec::encode_frame(
+            &frame_std,
+            SafetyTier::ReadOnlyProbe,
+            &permit,
+            chrono::Utc::now(),
+        )
+        .unwrap();
         assert_eq!(encoded_std, "d1234AABBCCDD\r");
     }
 
@@ -603,7 +655,10 @@ mod tests {
             chrono::Utc::now() + chrono::Duration::minutes(5),
             None,
         );
-        let err = driver.transmit(OutboundFrame::Can(frame), &permit).await.unwrap_err();
+        let err = driver
+            .transmit(OutboundFrame::Can(frame), &permit)
+            .await
+            .unwrap_err();
         assert!(matches!(err, HalError::SafetyViolation { .. }));
     }
 }

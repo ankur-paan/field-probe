@@ -108,9 +108,9 @@ impl KeyRing {
     /// Check whether the keyring contains any OperatorSecret keys or operator-scoped keys
     pub fn has_operator_keys(&self) -> bool {
         let guard = self.keys.read().unwrap();
-        guard.values().any(|k| {
-            k.key_type == KeyType::OperatorSecret || k.target_scope == "operator"
-        })
+        guard
+            .values()
+            .any(|k| k.key_type == KeyType::OperatorSecret || k.target_scope == "operator")
     }
 }
 
@@ -125,7 +125,10 @@ mod tests {
         let keyring = KeyRing::new();
         keyring.insert_symmetric_key("test-key", &[1, 2, 3, 4]);
 
-        assert_eq!(keyring.get_symmetric_key("test-key"), Some(vec![1, 2, 3, 4]));
+        assert_eq!(
+            keyring.get_symmetric_key("test-key"),
+            Some(vec![1, 2, 3, 4])
+        );
         assert_eq!(keyring.get_symmetric_key("missing"), None);
     }
 
@@ -159,4 +162,3 @@ mod tests {
         assert!(!keyring.verify_permit(&permit));
     }
 }
-

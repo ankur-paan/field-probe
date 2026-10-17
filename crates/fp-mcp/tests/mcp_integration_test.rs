@@ -60,10 +60,17 @@ async fn test_mcp_client_full_field_session_over_stdio() {
         "method": "initialize",
         "params": {}
     });
-    client_write.write_all(format!("{}\n", init_req).as_bytes()).await.unwrap();
+    client_write
+        .write_all(format!("{}\n", init_req).as_bytes())
+        .await
+        .unwrap();
     client_write.flush().await.unwrap();
 
-    let init_resp_str = client_lines.next_line().await.unwrap().expect("Init response");
+    let init_resp_str = client_lines
+        .next_line()
+        .await
+        .unwrap()
+        .expect("Init response");
     let init_resp: serde_json::Value = serde_json::from_str(&init_resp_str).unwrap();
     assert_eq!(init_resp["result"]["serverInfo"]["name"], "field-probe-mcp");
 
@@ -74,10 +81,17 @@ async fn test_mcp_client_full_field_session_over_stdio() {
         "method": "tools/list",
         "params": {}
     });
-    client_write.write_all(format!("{}\n", list_req).as_bytes()).await.unwrap();
+    client_write
+        .write_all(format!("{}\n", list_req).as_bytes())
+        .await
+        .unwrap();
     client_write.flush().await.unwrap();
 
-    let list_resp_str = client_lines.next_line().await.unwrap().expect("List response");
+    let list_resp_str = client_lines
+        .next_line()
+        .await
+        .unwrap()
+        .expect("List response");
     let list_resp: serde_json::Value = serde_json::from_str(&list_resp_str).unwrap();
     let tools = list_resp["result"]["tools"].as_array().unwrap();
     assert_eq!(tools.len(), 9);
@@ -92,13 +106,22 @@ async fn test_mcp_client_full_field_session_over_stdio() {
             "arguments": { "interface_id": "usb-serial-port-0" }
         }
     });
-    client_write.write_all(format!("{}\n", detect_req).as_bytes()).await.unwrap();
+    client_write
+        .write_all(format!("{}\n", detect_req).as_bytes())
+        .await
+        .unwrap();
     client_write.flush().await.unwrap();
 
-    let detect_resp_str = client_lines.next_line().await.unwrap().expect("Detect response");
+    let detect_resp_str = client_lines
+        .next_line()
+        .await
+        .unwrap()
+        .expect("Detect response");
     let detect_resp: serde_json::Value = serde_json::from_str(&detect_resp_str).unwrap();
     assert_eq!(detect_resp["result"]["isError"], false);
-    let detect_text = detect_resp["result"]["content"][0]["text"].as_str().unwrap();
+    let detect_text = detect_resp["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
     assert!(detect_text.contains("ModbusRtu"));
 
     // STEP D: Call get_register_catalog
@@ -111,10 +134,17 @@ async fn test_mcp_client_full_field_session_over_stdio() {
             "arguments": { "interface_id": "usb-serial-port-0" }
         }
     });
-    client_write.write_all(format!("{}\n", cat_req).as_bytes()).await.unwrap();
+    client_write
+        .write_all(format!("{}\n", cat_req).as_bytes())
+        .await
+        .unwrap();
     client_write.flush().await.unwrap();
 
-    let cat_resp_str = client_lines.next_line().await.unwrap().expect("Catalog response");
+    let cat_resp_str = client_lines
+        .next_line()
+        .await
+        .unwrap()
+        .expect("Catalog response");
     let cat_resp: serde_json::Value = serde_json::from_str(&cat_resp_str).unwrap();
     let cat_text = cat_resp["result"]["content"][0]["text"].as_str().unwrap();
     assert!(cat_text.contains("Float32 (CDAB"));
@@ -129,10 +159,17 @@ async fn test_mcp_client_full_field_session_over_stdio() {
             "arguments": { "interface_id": "usb-serial-port-0" }
         }
     });
-    client_write.write_all(format!("{}\n", audit_req).as_bytes()).await.unwrap();
+    client_write
+        .write_all(format!("{}\n", audit_req).as_bytes())
+        .await
+        .unwrap();
     client_write.flush().await.unwrap();
 
-    let audit_resp_str = client_lines.next_line().await.unwrap().expect("Audit response");
+    let audit_resp_str = client_lines
+        .next_line()
+        .await
+        .unwrap()
+        .expect("Audit response");
     let audit_resp: serde_json::Value = serde_json::from_str(&audit_resp_str).unwrap();
     let audit_text = audit_resp["result"]["content"][0]["text"].as_str().unwrap();
     assert!(audit_text.contains("MODBUS-001-ADDR-OVERFLOW"));
@@ -147,13 +184,23 @@ async fn test_mcp_client_full_field_session_over_stdio() {
             "arguments": {}
         }
     });
-    client_write.write_all(format!("{}\n", probe_req).as_bytes()).await.unwrap();
+    client_write
+        .write_all(format!("{}\n", probe_req).as_bytes())
+        .await
+        .unwrap();
     client_write.flush().await.unwrap();
 
-    let probe_resp_str = client_lines.next_line().await.unwrap().expect("Probe response");
+    let probe_resp_str = client_lines
+        .next_line()
+        .await
+        .unwrap()
+        .expect("Probe response");
     let probe_resp: serde_json::Value = serde_json::from_str(&probe_resp_str).unwrap();
     assert_eq!(probe_resp["result"]["isError"], true);
-    assert!(probe_resp["result"]["content"][0]["text"].as_str().unwrap().contains("BLOCKED"));
+    assert!(probe_resp["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("BLOCKED"));
 
     // STEP G: Call export_bus_artifacts (Telegraf & JSON)
     let export_req = json!({
@@ -165,12 +212,21 @@ async fn test_mcp_client_full_field_session_over_stdio() {
             "arguments": { "format": "telegraf" }
         }
     });
-    client_write.write_all(format!("{}\n", export_req).as_bytes()).await.unwrap();
+    client_write
+        .write_all(format!("{}\n", export_req).as_bytes())
+        .await
+        .unwrap();
     client_write.flush().await.unwrap();
 
-    let export_resp_str = client_lines.next_line().await.unwrap().expect("Export response");
+    let export_resp_str = client_lines
+        .next_line()
+        .await
+        .unwrap()
+        .expect("Export response");
     let export_resp: serde_json::Value = serde_json::from_str(&export_resp_str).unwrap();
-    let export_text = export_resp["result"]["content"][0]["text"].as_str().unwrap();
+    let export_text = export_resp["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
     assert!(export_text.contains("industrial_register"));
 
     // Clean teardown
