@@ -187,17 +187,86 @@ impl DashboardState {
     /// Ingest a live or replayed RawBusEvent into the inference and compliance pipelines
     pub fn ingest_event(&mut self, event: &fp_core::RawBusEvent) {
         self.frame_count += 1;
+        // 1. Audit physical layer flags and t1.5/t3.5 inter-frame timing
+        self.compliance.audit_raw_event(event);
+
         match &event.payload {
             fp_core::RawFrame::Can(frame) => {
                 self.engine.ingest_can_frame(frame, event.timestamp_us);
             }
             fp_core::RawFrame::Serial(chunk) => {
-                let matches = fp_autodetect::scan_modbus_rtu_frames(&chunk.data);
-                for (start, len) in matches {
+                let mut matched_known = false;
+
+                // A. Scan for Modbus RTU frames
+                let rtu_matches = fp_autodetect::scan_modbus_rtu_frames(&chunk.data);
+                for (start, len) in rtu_matches {
+                    matched_known = true;
                     let slice = &chunk.data[start..start + len];
                     if let Some(adu) = fp_dissectors::parse_modbus_rtu_frame(slice) {
                         self.engine.ingest_modbus_frame(&adu, event.timestamp_us);
                         self.compliance.audit_modbus_adu(&adu);
+                    }
+                }
+
+                // B. Scan for BACnet MS/TP frames
+                let mstp_matches = fp_autodetect::scan_bacnet_mstp_frames(&chunk.data);
+                for (start, len) in mstp_matches {
+                    matched_known = true;
+                    let slice = &chunk.data[start..start + len];
+                    if let Some(mstp) = fp_dissectors::dissect_bacnet_mstp(slice) {
+                        self.engine.catalog.insert_or_update(fp_inference::InferredRegisterEntry {
+                            node_or_slave: format!("BACnet_{}", mstp.source_address),
+                            address: mstp.destination_address as u32,
+                            polling_frequency_hz: 1.0,
+                            jitter_ms: 0.0,
+                            raw_hex: format!("0x{:02X}", mstp.frame_type as u8),
+                            plausible_type: format!("BACnet MS/TP ({})", mstp.frame_type.name()),
+                            confidence: 0.98,
+                        });
+                    }
+                }
+
+                // C. Scan for DNP3 frames
+                let dnp3_matches = fp_autodetect::scan_dnp3_frames(&chunk.data);
+                for (start, len) in dnp3_matches {
+                    matched_known = true;
+                    let slice = &chunk.data[start..start + len];
+                    if let Some(dnp3) = fp_dissectors::dissect_dnp3(slice) {
+                        self.engine.catalog.insert_or_update(fp_inference::InferredRegisterEntry {
+                            node_or_slave: format!("DNP3_{}", dnp3.source),
+                            address: dnp3.destination as u32,
+                            polling_frequency_hz: 1.0,
+                            jitter_ms: 0.0,
+                            raw_hex: format!("{:?}", dnp3.function_code),
+                            plausible_type: format!(
+                                "DNP3 {:?} ({} objs)",
+                                dnp3.function_code,
+                                dnp3.objects.len()
+                            ),
+                            confidence: 0.98,
+                        });
+                    }
+                }
+
+                // D. Fallback: Reverse-engineer unknown binary serial protocol via UnknownFramer
+                if !matched_known && chunk.data.len() >= 12 {
+                    let framer = fp_autodetect::UnknownFramer::new();
+                    if let Some(hyp) = framer.infer_from_raw_stream(&chunk.data) {
+                        for field in &hyp.fields {
+                            self.engine.catalog.insert_or_update(fp_inference::InferredRegisterEntry {
+                                node_or_slave: "UnknownProto".to_string(),
+                                address: field.start_byte as u32,
+                                polling_frequency_hz: 1.0,
+                                jitter_ms: 0.0,
+                                raw_hex: format!("{}B", field.length),
+                                plausible_type: format!(
+                                    "{}: {}",
+                                    field.field_type.name(),
+                                    field.description
+                                ),
+                                confidence: hyp.confidence,
+                            });
+                        }
                     }
                 }
             }
@@ -981,7 +1050,7 @@ pub fn render_dashboard(
     writeln!(out, "\x1b[1;36m├──────────────────────────────────────────────────────────────────────────────┤\x1b[0m")?;
     writeln!(
         out,
-        "\x1b[1;36m│\x1b[0m  \x1b[1;35mMCP Server:\x1b[0m Ready (8 Tools) — Run \x1b[1;37m`fp mcp --stdio`\x1b[0m for Claude/Antigravity    \x1b[1;36m│\x1b[0m"
+        "\x1b[1;36m│\x1b[0m  \x1b[1;35mMCP Server:\x1b[0m Ready (9 Tools) — Run \x1b[1;37m`fp mcp --stdio`\x1b[0m for Claude/Antigravity    \x1b[1;36m│\x1b[0m"
     )?;
     writeln!(
         out,
@@ -1028,4 +1097,41 @@ mod tests {
         assert!(!state.engine.diff_session.is_active());
         assert!(state.diff_report.is_some());
     }
+
+    #[test]
+    fn test_dashboard_ingest_event_unknown_framer_and_compliance() {
+        let mut state = DashboardState::new(SafetyTier::PassiveListenOnly, "Auto", 500_000);
+
+        // 1. Synthetic unknown binary packet sequence (8 frames of 6 bytes each)
+        let mut raw_bytes = Vec::new();
+        for i in 0..8u8 {
+            let mut f = vec![0xAA, 0x55, 0x01, i, 0x10];
+            let sum: u8 = f.iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
+            f.push(sum);
+            raw_bytes.extend_from_slice(&f);
+        }
+
+        let chunk = fp_core::TimestampedChunk::new(raw_bytes, Some(2000));
+        let event = fp_core::RawBusEvent::new_serial_rx(
+            "serial0",
+            1_000_000,
+            fp_core::LinkParams::Serial(Default::default()),
+            chunk,
+        );
+
+        state.ingest_event(&event);
+        assert_eq!(state.frame_count, 1);
+        assert_eq!(state.compliance.total_frames_analyzed, 1);
+
+        // Verify that UnknownProto entries were populated in catalog
+        let unknown_entries: Vec<_> = state
+            .engine
+            .catalog
+            .entries
+            .values()
+            .filter(|e| e.node_or_slave == "UnknownProto")
+            .collect();
+        assert!(!unknown_entries.is_empty());
+    }
 }
+
