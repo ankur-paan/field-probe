@@ -11,6 +11,7 @@ pub enum McpToolName {
     CorrelatePhysicalChange,
     LoadSecurityKey,
     RequestActiveProbe,
+    ExportBusArtifacts,
 }
 
 impl McpToolName {
@@ -24,6 +25,7 @@ impl McpToolName {
             Self::CorrelatePhysicalChange => "correlate_physical_change",
             Self::LoadSecurityKey => "load_security_key",
             Self::RequestActiveProbe => "request_active_probe",
+            Self::ExportBusArtifacts => "export_bus_artifacts",
         }
     }
 }
@@ -132,6 +134,22 @@ pub fn get_tool_definitions() -> Vec<McpToolDefinition> {
                 "required": ["interface_id", "permit_id", "payload_hex"]
             }),
         },
+        McpToolDefinition {
+            name: "export_bus_artifacts".to_string(),
+            description: "Export the discovered register catalog and CAN signals into Vector DBC, Wireshark PCAP-NG, Telegraf Influx line protocol, Node-RED flow, or JSON.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "interface_id": { "type": "string" },
+                    "format": {
+                        "type": "string",
+                        "enum": ["dbc", "pcapng", "telegraf", "json", "nodered"],
+                        "description": "Target export format"
+                    }
+                },
+                "required": ["format"]
+            }),
+        },
     ]
 }
 
@@ -140,8 +158,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_all_eight_tools_defined() {
+    fn test_all_tools_defined() {
         let tools = get_tool_definitions();
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 9);
     }
 }
+

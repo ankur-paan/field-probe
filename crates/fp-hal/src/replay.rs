@@ -148,6 +148,18 @@ impl BusInterface for ReplayInterface {
             return Err(HalError::PermitRejected);
         }
 
+        let target_scope = match &frame {
+            OutboundFrame::Can(c) => format!("CAN:0x{:X}", c.id.as_raw()),
+            OutboundFrame::Serial(b) if !b.is_empty() => format!("Modbus:Slave{:02X}", b[0]),
+            OutboundFrame::Serial(_) => "Serial".to_string(),
+        };
+        if !permit.matches_scope(&target_scope) {
+            return Err(HalError::InvalidPermit(format!(
+                "Permit scope '{:?}' does not match target '{}'",
+                permit.scope, target_scope
+            )));
+        }
+
         // Store transmitted frame
         self.transmitted_history.write().await.push(frame.clone());
 
@@ -280,5 +292,28 @@ mod tests {
         } else {
             panic!("Expected CAN event");
         }
+    }
+
+    #[tokio::test]
+    async fn test_out_of_scope_permit_is_rejected() {
+        let mut replay = ReplayInterface::new("vbus_scope", 16);
+        replay.set_safety_tier(SafetyTier::ReadOnlyProbe).await.unwrap();
+
+        let permit_scoped = SafetyPermit::new(
+            "p_can_only",
+            SafetyTier::ReadOnlyProbe,
+            "tester",
+            Utc::now() + Duration::hours(1),
+            Some("CAN:0x7E0".to_string()),
+        );
+
+        // Frame targeting CAN 0x123 violates scope "CAN:0x7E0"
+        let can_frame = CanFrame::new_standard(0x123, &[0x00]);
+        let result = replay.transmit(OutboundFrame::Can(can_frame), &permit_scoped).await;
+        assert!(matches!(result, Err(HalError::InvalidPermit(_))));
+
+        // Frame targeting CAN 0x7E0 satisfies scope
+        let valid_frame = CanFrame::new_standard(0x7E0, &[0x02, 0x10, 0x01]);
+        assert!(replay.transmit(OutboundFrame::Can(valid_frame), &permit_scoped).await.is_ok());
     }
 }

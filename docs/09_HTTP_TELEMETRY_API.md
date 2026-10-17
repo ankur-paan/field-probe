@@ -1,13 +1,13 @@
 # 09. HTTP and WebSocket Telemetry API (fp-server)
 
-> **Topic:** REST endpoints and real-time telemetry streaming for field-probe.
+> **Topic:** REST endpoints, Server-Sent Events (SSE) streaming, and SCADA artifact exports.
 
 ---
 
 ## 1. Description
 
-The `fp-server` crate provides an asynchronous HTTP REST and real-time telemetry interface.  
-Engineers, dashboards, and AI agents can query link status and live register catalogs without terminal access.  
+The `fp-server` crate provides an asynchronous HTTP REST and real-time telemetry streaming interface.  
+Engineers, dashboards, and AI agents can query link status, subscribe to live bus frames, and download register catalogs without terminal access.  
 The server enforces the Tier-0 Zero-TX boundary across all endpoints.
 
 ---
@@ -110,3 +110,40 @@ Returns discovered registers, polling frequencies, raw hex data, and inferred ph
   ]
 }
 ```
+
+---
+
+### 3.5 Real-Time Event Stream (`GET /api/v1/events/sse`)
+
+Streams newly captured bus frames in real time over Server-Sent Events (SSE).
+
+**Request:**
+```http
+GET /api/v1/events/sse HTTP/1.1
+Host: localhost:8080
+Accept: text/event-stream
+```
+
+**Stream Response (200 OK):**
+```http
+HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+Access-Control-Allow-Origin: *
+
+: connected
+
+data: {"interface_id":"can0","timestamp_us":1024000,"link_params":{"Can":{"bitrate":500000,"fd":false}},"payload":{"Can":{"id":{"Standard":456},"dlc":8,"data":[1,2,3,4,5,6,7,8],"is_fd":false,"is_rtr":false}},"direction":"Rx","error_flags":{"can_crc_error":false}}
+```
+
+---
+
+### 3.6 SCADA Artifact Export (`GET /api/v1/export/{format}`)
+
+Exports the active register catalog and signals directly into standard SCADA configurations:
+- `GET /api/v1/export/dbc` — Vector CAN database definition
+- `GET /api/v1/export/pcapng` — Wireshark network trace
+- `GET /api/v1/export/telegraf` — InfluxDB Line Protocol
+- `GET /api/v1/export/nodered` — Node-RED IoT gateway flow
+- `GET /api/v1/export/json` — JSON register catalog

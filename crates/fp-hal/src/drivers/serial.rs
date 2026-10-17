@@ -140,6 +140,17 @@ impl BusInterface for SerialDriver {
             return Err(HalError::PermitRejected);
         }
 
+        let target_scope = match &frame {
+            OutboundFrame::Serial(b) if !b.is_empty() => format!("Modbus:Slave{:02X}", b[0]),
+            _ => "Serial".to_string(),
+        };
+        if !permit.matches_scope(&target_scope) {
+            return Err(HalError::InvalidPermit(format!(
+                "Permit scope '{:?}' does not match target '{}'",
+                permit.scope, target_scope
+            )));
+        }
+
         match frame {
             OutboundFrame::Serial(bytes) => {
                 let event = RawBusEvent {

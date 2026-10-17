@@ -122,3 +122,63 @@ async fn test_fp_server_bus_summary_and_catalog() {
 
     server_handle.abort();
 }
+
+#[tokio::test]
+async fn test_fp_server_sse_streaming() {
+    use fp_core::{CanFrame, Direction, LinkParams, RawBusEvent, RawFrame, SerialParams};
+    use tokio::io::AsyncBufReadExt;
+
+    let state = Arc::new(ServerState::new());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server_handle = tokio::spawn(run_server(listener, Arc::clone(&state)));
+
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(b"GET /api/v1/events/sse HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+
+    let (reader, _writer) = stream.into_split();
+    let mut lines = tokio::io::BufReader::new(reader).lines();
+
+    // Verify SSE header
+    let status_line = lines.next_line().await.unwrap().expect("Status line");
+    assert!(status_line.contains("200 OK"));
+
+    // Consume remaining headers until empty line
+    loop {
+        let line = lines.next_line().await.unwrap().expect("Header line");
+        if line.is_empty() {
+            break;
+        }
+    }
+
+    // Read initial comment
+    let comment = lines.next_line().await.unwrap().expect("Initial comment");
+    assert_eq!(comment, ": connected");
+
+    // Read empty line after comment
+    let _ = lines.next_line().await.unwrap();
+
+    // Broadcast a test event
+    let test_event = RawBusEvent {
+        interface_id: "can0".to_string(),
+        timestamp_us: 123456,
+        link_params: LinkParams::Serial(SerialParams::default()),
+        payload: RawFrame::Can(CanFrame::new_standard(0x123, &[0xAA, 0xBB])),
+        direction: Direction::Rx,
+        error_flags: Default::default(),
+    };
+    state.broadcast_event(test_event);
+
+    // Read SSE event
+    let data_line = lines.next_line().await.unwrap().expect("SSE data line");
+    assert!(data_line.starts_with("data: "));
+    assert!(data_line.contains("123456"));
+    assert!(data_line.contains("can0"));
+
+    server_handle.abort();
+}
+

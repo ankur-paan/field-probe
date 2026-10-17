@@ -208,6 +208,14 @@ impl SlcanCodec {
             return Err(HalError::PermitRejected);
         }
 
+        let target_scope = format!("CAN:0x{:X}", frame.id.as_raw());
+        if !permit.matches_scope(&target_scope) {
+            return Err(HalError::InvalidPermit(format!(
+                "Permit scope '{:?}' does not match target '{}'",
+                permit.scope, target_scope
+            )));
+        }
+
         match frame.id {
             CanId::Standard(id) => {
                 if frame.is_rtr {

@@ -1,14 +1,14 @@
 # 08. Field CLI and Workflows (fp-cli)
 
-> **Topic:** Terminal user interface and field wiring diagnostic procedures.
+> **Topic:** Terminal user interface, field wiring diagnostic procedures, and telemetry artifact export.
 
 ---
 
 ## 1. Description
 
-The `fp-cli` crate provides the native binary and Terminal User Interface (TUI).  
+The `fp-cli` crate provides the native binary, full-screen Terminal User Interface (TUI), and artifact export workflows.  
 Engineers use `fp` directly on a rugged field laptop without network access.  
-The interface displays live bus load, framing errors, and discovered registers.
+The interface displays live bus load, framing errors, discovered registers, and allows instant SCADA/Wireshark export.
 
 ---
 
@@ -44,6 +44,15 @@ Follow these steps when diagnosing an unknown cabinet:
 
 5. **Execute Compliance Audit:**  
    Review physical link warnings (e.g., termination resistor missing or wire polarity swapped).
+
+6. **Export Field Artifacts:**  
+   Generate standard configurations for PLC/SCADA systems:
+   ```bash
+   fp export --format dbc
+   fp export --format pcapng
+   fp export --format telegraf
+   fp export --format nodered
+   ```
 
 ---
 

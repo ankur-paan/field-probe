@@ -48,6 +48,8 @@ pub struct SafetyPermit {
     pub expires_at: DateTime<Utc>,
     /// Optional target restriction (e.g. "CAN:0x7E0" or "Modbus:Slave04")
     pub scope: Option<String>,
+    /// Optional cryptographic signature (e.g. HMAC-SHA256 hex string)
+    pub signature: Option<String>,
 }
 
 impl SafetyPermit {
@@ -65,12 +67,55 @@ impl SafetyPermit {
             authorized_caller: authorized_caller.into(),
             expires_at,
             scope,
+            signature: None,
+        }
+    }
+
+    /// Attach a cryptographic signature to the permit
+    pub fn with_signature(mut self, signature: impl Into<String>) -> Self {
+        self.signature = Some(signature.into());
+        self
+    }
+
+    /// Canonical byte representation of permit fields for cryptographic signing
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(self.permit_id.as_bytes());
+        buf.push(b':');
+        buf.push(self.granted_tier as u8);
+        buf.push(b':');
+        buf.extend_from_slice(self.authorized_caller.as_bytes());
+        buf.push(b':');
+        buf.extend_from_slice(&self.expires_at.timestamp().to_be_bytes());
+        buf.push(b':');
+        if let Some(ref scope) = self.scope {
+            buf.extend_from_slice(scope.as_bytes());
+        }
+        buf
+    }
+
+    /// Check if target matches permit scope restriction
+    pub fn matches_scope(&self, target_scope: &str) -> bool {
+        match &self.scope {
+            None => true,
+            Some(s) if s == "*" || s.eq_ignore_ascii_case("global") => true,
+            Some(s) => s.eq_ignore_ascii_case(target_scope) || target_scope.starts_with(s),
         }
     }
 
     /// Check if permit is currently valid and satisfies requested tier
     pub fn is_valid_for(&self, requested: SafetyTier, now: DateTime<Utc>) -> bool {
         self.granted_tier >= requested && self.expires_at > now
+    }
+
+    /// Check if permit satisfies tier, expiration, and target scope
+    pub fn is_valid_with_scope(
+        &self,
+        requested: SafetyTier,
+        target_scope: &str,
+        now: DateTime<Utc>,
+    ) -> bool {
+        self.is_valid_for(requested, now) && self.matches_scope(target_scope)
     }
 }
 

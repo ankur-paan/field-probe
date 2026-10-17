@@ -26,6 +26,7 @@ pub struct ServerState {
     pub detected_baud_rate: u32,
     pub dongles: Vec<AdapterCapabilities>,
     pub start_time: Instant,
+    pub event_sender: tokio::sync::broadcast::Sender<fp_core::RawBusEvent>,
 }
 
 impl Default for ServerState {
@@ -36,6 +37,7 @@ impl Default for ServerState {
 
 impl ServerState {
     pub fn new() -> Self {
+        let (tx, _rx) = tokio::sync::broadcast::channel(1024);
         Self {
             inference_engine: Arc::new(RwLock::new(InferenceEngine::new(500_000, 1000))),
             compliance_report: Arc::new(RwLock::new(ComplianceReport::new())),
@@ -44,7 +46,18 @@ impl ServerState {
             detected_baud_rate: 9600,
             dongles: fp_hal::enumerate_dongles(),
             start_time: Instant::now(),
+            event_sender: tx,
         }
+    }
+
+    /// Subscribe to live broadcast bus events for SSE/WebSocket streaming
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<fp_core::RawBusEvent> {
+        self.event_sender.subscribe()
+    }
+
+    /// Broadcast a newly captured or ingested bus event to all active streams
+    pub fn broadcast_event(&self, event: fp_core::RawBusEvent) {
+        let _ = self.event_sender.send(event);
     }
 
     pub fn handle_health(&self) -> serde_json::Value {
@@ -103,5 +116,25 @@ impl ServerState {
             "total_entries": entries.len(),
             "registers": entries
         })
+    }
+
+    pub async fn handle_export(&self, format: &str) -> (&'static str, String) {
+        let engine = self.inference_engine.read().await;
+        match format.to_lowercase().as_str() {
+            "dbc" => ("text/plain; charset=utf-8", fp_inference::export_dbc(&[])),
+            "pcapng" => (
+                "application/vnd.tcpdump.pcap",
+                String::from_utf8_lossy(&fp_inference::export_pcapng(&[])).to_string(),
+            ),
+            "telegraf" => (
+                "text/plain; charset=utf-8",
+                fp_inference::export_telegraf(&engine.catalog),
+            ),
+            "nodered" => (
+                "application/json",
+                fp_inference::export_nodered_flow(&engine.catalog),
+            ),
+            _ => ("application/json", fp_inference::export_json(&engine.catalog)),
+        }
     }
 }

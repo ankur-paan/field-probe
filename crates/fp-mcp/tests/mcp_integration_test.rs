@@ -80,7 +80,7 @@ async fn test_mcp_client_full_field_session_over_stdio() {
     let list_resp_str = client_lines.next_line().await.unwrap().expect("List response");
     let list_resp: serde_json::Value = serde_json::from_str(&list_resp_str).unwrap();
     let tools = list_resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 8);
+    assert_eq!(tools.len(), 9);
 
     // STEP C: Call auto_detect_bus
     let detect_req = json!({
@@ -154,6 +154,24 @@ async fn test_mcp_client_full_field_session_over_stdio() {
     let probe_resp: serde_json::Value = serde_json::from_str(&probe_resp_str).unwrap();
     assert_eq!(probe_resp["result"]["isError"], true);
     assert!(probe_resp["result"]["content"][0]["text"].as_str().unwrap().contains("BLOCKED"));
+
+    // STEP G: Call export_bus_artifacts (Telegraf & JSON)
+    let export_req = json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+            "name": "export_bus_artifacts",
+            "arguments": { "format": "telegraf" }
+        }
+    });
+    client_write.write_all(format!("{}\n", export_req).as_bytes()).await.unwrap();
+    client_write.flush().await.unwrap();
+
+    let export_resp_str = client_lines.next_line().await.unwrap().expect("Export response");
+    let export_resp: serde_json::Value = serde_json::from_str(&export_resp_str).unwrap();
+    let export_text = export_resp["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(export_text.contains("industrial_register"));
 
     // Clean teardown
     drop(client_write);

@@ -76,6 +76,7 @@ impl McpServerState {
             "correlate_physical_change" => self.tool_correlate_physical_change(arguments),
             "load_security_key" => self.tool_load_security_key(arguments),
             "request_active_probe" => self.tool_request_active_probe(arguments),
+            "export_bus_artifacts" => self.tool_export_bus_artifacts(arguments),
             _ => Err(McpError::new(-32601, format!("Unknown tool '{}'", name))),
         }
     }
@@ -232,14 +233,24 @@ impl McpServerState {
             ));
         }
 
+        let scope = args.get("scope").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let signature = args.get("signature").and_then(|v| v.as_str());
+
         // Validate permit
-        let permit = SafetyPermit::new(
-            "mcp-probe-token",
+        let mut permit = SafetyPermit::new(
+            token.unwrap_or("mcp-probe-token"),
             SafetyTier::ReadOnlyProbe,
             "mcp-operator",
             chrono::Utc::now() + chrono::Duration::minutes(10),
-            None,
+            scope,
         );
+
+        if let Some(sig) = signature {
+            permit = permit.with_signature(sig);
+            if !self.keyring.verify_permit(&permit) {
+                return Err(McpError::safety_violation("Supplied safety permit signature is INVALID"));
+            }
+        }
 
         if !permit.is_valid_for(SafetyTier::ReadOnlyProbe, chrono::Utc::now()) {
             return Err(McpError::safety_violation("Supplied safety permit has expired"));
@@ -247,7 +258,36 @@ impl McpServerState {
 
         Ok(json!({
             "status": "Active probe dispatched under Tier-1 ReadOnlyProbe authorization",
-            "probe_type": "Read Device Identification (FC 0x2B / 0x0E)"
+            "probe_type": "Read Device Identification (FC 0x2B / 0x0E)",
+            "permit_id": permit.permit_id
+        }))
+    }
+
+    fn tool_export_bus_artifacts(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+        let format = args
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("json")
+            .to_lowercase();
+
+        let artifact = match format.as_str() {
+            "dbc" => {
+                let msgs = vec![];
+                fp_inference::export_dbc(&msgs)
+            }
+            "pcapng" => {
+                let bytes = fp_inference::export_pcapng(&[]);
+                format!("PCAP-NG export: {} bytes formatted", bytes.len())
+            }
+            "telegraf" => fp_inference::export_telegraf(&self.inference_engine.catalog),
+            "nodered" => fp_inference::export_nodered_flow(&self.inference_engine.catalog),
+            _ => fp_inference::export_json(&self.inference_engine.catalog),
+        };
+
+        Ok(json!({
+            "status": "success",
+            "format": format,
+            "artifact": artifact
         }))
     }
 

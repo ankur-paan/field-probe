@@ -23,3 +23,5 @@ pub use params::{
     SerialParams, SerialSilenceIntervals, StopBits, COMMON_CAN_BITRATES, COMMON_SERIAL_BAUD_RATES,
 };
 pub use safety::{SafetyPermit, SafetyTier};
+pub use chrono;
+

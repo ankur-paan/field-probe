@@ -159,6 +159,17 @@ impl BusInterface for SocketCanDriver {
             return Err(HalError::PermitRejected);
         }
 
+        let target_scope = match &frame {
+            OutboundFrame::Can(c) => format!("CAN:0x{:X}", c.id.as_raw()),
+            _ => "CAN".to_string(),
+        };
+        if !permit.matches_scope(&target_scope) {
+            return Err(HalError::InvalidPermit(format!(
+                "Permit scope '{:?}' does not match target '{}'",
+                permit.scope, target_scope
+            )));
+        }
+
         match frame {
             OutboundFrame::Can(can_frame) => {
                 let event = RawBusEvent {

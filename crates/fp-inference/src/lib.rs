@@ -3,6 +3,7 @@ pub mod catalog;
 pub mod decoder;
 pub mod diff_capture;
 pub mod engine;
+pub mod export;
 pub mod histogram;
 pub mod pairing;
 pub mod plausibility;
@@ -18,8 +19,10 @@ pub use decoder::{
 };
 pub use diff_capture::{DiffCaptureReport, DiffCaptureSession, MutatedEntity};
 pub use engine::{InferenceEngine, InferenceSummary};
+pub use export::{export_dbc, export_json, export_nodered_flow, export_pcapng, export_telegraf};
 pub use histogram::{IdTimingTracker, PeriodicStats, TimingHistogramEngine, WelfordTracker};
 pub use pairing::{MatchedTransaction, TransactionMatcher};
 pub use plausibility::{PlausibilityCandidate, PlausibilityScorer};
 pub use signals::{SignalByteOrder, SignalDefinition};
 pub use sniffer::{BitDeltaReport, CanSnifferEngine, SnifferSlot};
+
