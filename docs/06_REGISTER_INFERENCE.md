@@ -66,3 +66,25 @@ The inference engine fully supports Flexible Data-Rate (CAN-FD) traffic up to 64
 - **BRS & ESI Telemetry:** Captures Bit Rate Switch (`brs`) and Error State Indicator (`esi`) flags across all physical and replay frames.
 - **64-Byte Sniffer & Differential Isolation:** `SnifferSlot` and `DiffCaptureSession` track full 64-byte arrays without heap reallocation, enabling real-time bitwise delta isolation and ambient noise notching across high-density automotive ECUs.
 
+---
+
+## 7. Vector CANdb++ (.dbc) Signal Importer
+
+The `fp-inference` crate parses standard Vector CANdb++ (`.dbc`) database files to convert raw binary payloads into physical engineering values:
+
+- **Message Declarations (`BO_`):** Identifies message arbitration IDs, distinguishing standard 11-bit IDs from extended 29-bit identifiers (indicated by bit 31 set in the DBC ID field).
+- **Signal Extraction (`SG_`):** Decodes signals with Intel (little-endian) and Motorola (big-endian) byte ordering. Applies bit length extraction, sign extension for two's complement values, and linear scaling:
+  $$\text{Physical Value} = (\text{Raw Integer} \times \text{Factor}) + \text{Offset}$$
+- **Dynamic Signal Decoding:** The `DbcDatabase::extract_signals` method accepts incoming `CanFrame` structs and returns decoded `(SignalName, PhysicalValue)` tuples in real time.
+
+---
+
+## 8. AUTOSAR End-to-End (E2E) Functional Safety
+
+The `fp-crypto` crate implements AUTOSAR E2E protection profiles to validate message integrity and detect sequence faults:
+
+- **Profile 1 Protection:** Employs CRC-8 with polynomial `0x1D` (initial value `0xFF`, final XOR `0xFF`). Ingests 16-bit DataIDs (DataID low byte and DataID high byte) with a 4-bit sequence counter (`0..=14`).
+- **Profile 2 Protection:** Employs CRC-8 SAE J1850 with polynomial `0x2F` (initial value `0xFF`, final XOR `0xFF`). Utilizes a 16-byte DataID array indexed by a 4-bit sequence counter (`0..=15`).
+- **Counter Sequence Validation:** Tracks consecutive message counter values. Flags counter freezes, duplicate frames, and sequence jumps exceeding maximum allowed step size.
+- **E2E Notch Masking:** The `generate_e2e_notch_mask` function creates a 64-byte bitmask targeting the exact byte offsets of the CRC and rolling counter. When analyzing vehicle bus traffic during physical actuation tests, the differential capture session applies this mask to eliminate rolling safety counter noise from physical signal correlation.
+

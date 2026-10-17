@@ -14,9 +14,11 @@ Every interface enforces the `SafetyTier::PassiveListenOnly` invariant on startu
 
 ## 2. Replay Architecture
 
-The `ReplayInterface` reads synthetic `.pcap` and `.candump` captures.  
+The `ReplayInterface` reads synthetic `.pcapng`, Linux `.candump`, and Vector CANoe/CANalyzer `.asc` captures.  
 It broadcasts events through an async channel at microsecond intervals.  
 This allows testing algorithms in CI without physical adapters.
+
+- **Vector ASC Log Parsing (`parse_asc_log`):** Supports both classical CAN (standard 11-bit, extended 29-bit with `x` suffix, remote transmission requests) and modern CAN-FD (`CANFD <channel> <dir> <id> <brs> <esi> <dlc> <len> <data...>`). Reconstructs exact microsecond timestamps for deterministic test execution.
 
 ![Replay HAL Architecture](./assets/hal_replay.svg)
 

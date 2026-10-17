@@ -476,7 +476,169 @@ fn hex_to_bytes(s: &str) -> Vec<u8> {
     out
 }
 
-/// Load replay events from a file (.pcapng, candump text log, or raw binary)
+/// Parse a single line from a Vector CANoe/CANalyzer ASC log
+pub fn parse_asc_line(line: &str) -> Option<(u64, CanFrame)> {
+    let line = line.trim();
+    if line.is_empty()
+        || line.starts_with("//")
+        || line.starts_with("date")
+        || line.starts_with("base")
+        || line.starts_with("timestamps")
+        || line.starts_with("internal")
+        || line.starts_with("version")
+        || line.starts_with("Begin")
+        || line.starts_with("End")
+    {
+        return None;
+    }
+
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    if tokens.len() < 4 {
+        return None;
+    }
+
+    // Token 0: timestamp in seconds (float)
+    let ts_sec: f64 = tokens[0].parse().ok()?;
+    let ts_us = (ts_sec * 1_000_000.0).round() as u64;
+
+    // Check CAN-FD line:
+    // Format: <ts> CANFD <channel> <dir> <id> <brs> <esi> <dlc> <len> <b0> <b1> ...
+    if tokens[1].eq_ignore_ascii_case("CANFD") {
+        if tokens.len() < 9 {
+            return None;
+        }
+        let id_str = tokens[4];
+        let (id_val, is_ext) = parse_asc_can_id(id_str)?;
+        let can_id = if is_ext {
+            CanId::Extended(id_val)
+        } else {
+            CanId::Standard(id_val as u16)
+        };
+
+        let brs = tokens[5] == "1";
+        let esi = tokens[6] == "1";
+        let _dlc_code: u8 = tokens[7].parse().unwrap_or(8);
+        let data_len: usize = tokens[8].parse().ok()?;
+
+        let mut data = Vec::with_capacity(data_len);
+        for token in tokens.iter().skip(9).take(data_len) {
+            if let Ok(b) = u8::from_str_radix(token, 16) {
+                data.push(b);
+            } else {
+                break;
+            }
+        }
+
+        return Some((
+            ts_us,
+            CanFrame {
+                id: can_id,
+                dlc: data.len() as u8,
+                data: bytes::Bytes::from(data),
+                is_fd: true,
+                brs,
+                esi,
+                is_rtr: false,
+                is_error: false,
+            },
+        ));
+    }
+
+    // Classical CAN line:
+    // Format: <ts> <channel> <id> <dir> [d|r] <dlc> <b0> <b1> ...
+    let id_str = tokens[2];
+    let (id_val, is_ext) = parse_asc_can_id(id_str)?;
+    let can_id = if is_ext {
+        CanId::Extended(id_val)
+    } else {
+        CanId::Standard(id_val as u16)
+    };
+
+    let dir_token = tokens[3];
+    let is_dir = dir_token.eq_ignore_ascii_case("Rx") || dir_token.eq_ignore_ascii_case("Tx");
+    if !is_dir {
+        return None;
+    }
+
+    let mut idx = 4;
+    let mut is_rtr = false;
+    if idx < tokens.len()
+        && (tokens[idx].eq_ignore_ascii_case("d") || tokens[idx].eq_ignore_ascii_case("r"))
+    {
+        if tokens[idx].eq_ignore_ascii_case("r") {
+            is_rtr = true;
+        }
+        idx += 1;
+    }
+
+    let dlc: usize = if idx < tokens.len() {
+        tokens[idx].parse().unwrap_or(0)
+    } else {
+        0
+    };
+    idx += 1;
+
+    let mut data = Vec::with_capacity(dlc);
+    if !is_rtr {
+        for token in tokens.iter().skip(idx).take(dlc) {
+            if let Ok(b) = u8::from_str_radix(token, 16) {
+                data.push(b);
+            } else {
+                break;
+            }
+        }
+    }
+
+    Some((
+        ts_us,
+        CanFrame {
+            id: can_id,
+            dlc: dlc as u8,
+            data: bytes::Bytes::from(data),
+            is_fd: false,
+            brs: false,
+            esi: false,
+            is_rtr,
+            is_error: false,
+        },
+    ))
+}
+
+fn parse_asc_can_id(id_str: &str) -> Option<(u32, bool)> {
+    let clean = id_str.trim();
+    if clean.ends_with('x') || clean.ends_with('X') {
+        let hex_part = &clean[..clean.len() - 1];
+        let val = u32::from_str_radix(hex_part, 16).ok()?;
+        Some((val, true))
+    } else {
+        let val = u32::from_str_radix(clean, 16).ok()?;
+        let is_ext = val > 0x7FF;
+        Some((val, is_ext))
+    }
+}
+
+/// Parse full Vector ASC log content into a sequence of RawBusEvent items
+pub fn parse_asc_log(content: &str) -> Result<Vec<RawBusEvent>, HalError> {
+    let mut events = Vec::new();
+    for line in content.lines() {
+        if let Some((ts_us, frame)) = parse_asc_line(line) {
+            events.push(RawBusEvent::new_can_rx(
+                "can0",
+                ts_us,
+                LinkParams::Can(Default::default()),
+                frame,
+            ));
+        }
+    }
+    if events.is_empty() {
+        return Err(HalError::Io(
+            "No valid CAN frames found in Vector ASC log".to_string(),
+        ));
+    }
+    Ok(events)
+}
+
+/// Load replay events from a file (.pcapng, candump text log, Vector .asc, or raw binary)
 pub fn load_replay_file(path: &str) -> Result<Vec<RawBusEvent>, HalError> {
     let content = std::fs::read(path)
         .map_err(|e| HalError::Io(format!("Failed to read replay file '{}': {}", path, e)))?;
@@ -488,7 +650,19 @@ pub fn load_replay_file(path: &str) -> Result<Vec<RawBusEvent>, HalError> {
         return parse_pcapng_events(&content);
     }
 
+    if path.ends_with(".asc") {
+        if let Ok(text) = std::str::from_utf8(&content) {
+            return parse_asc_log(text);
+        }
+    }
+
     if let Ok(text) = std::str::from_utf8(&content) {
+        if text.contains("base hex timestamps") || text.starts_with("date ") {
+            if let Ok(events) = parse_asc_log(text) {
+                return Ok(events);
+            }
+        }
+
         let mut events = Vec::new();
         for line in text.lines() {
             if let Some((ts_us, frame)) = parse_candump_line(line) {
@@ -803,5 +977,86 @@ mod tests {
         } else {
             panic!("Expected Serial frame, got CAN frame");
         }
+    }
+
+    #[test]
+    fn test_parse_asc_classical_lines() {
+        // Standard 11-bit CAN line
+        let std_line = "   0.001050 1  123             Rx   d 4 01 02 03 04";
+        let (ts, frame) = parse_asc_line(std_line).expect("Parsed std classical CAN");
+        assert_eq!(ts, 1050);
+        assert_eq!(frame.id, CanId::Standard(0x123));
+        assert_eq!(frame.dlc, 4);
+        assert_eq!(frame.data.as_ref(), &[0x01, 0x02, 0x03, 0x04]);
+        assert!(!frame.is_fd);
+        assert!(!frame.is_rtr);
+
+        // Extended 29-bit CAN line with 'x' suffix
+        let ext_line = "   0.002100 1  18DAF110x       Rx   d 3 02 01 00";
+        let (ts_ext, frame_ext) = parse_asc_line(ext_line).expect("Parsed ext classical CAN");
+        assert_eq!(ts_ext, 2100);
+        assert_eq!(frame_ext.id, CanId::Extended(0x18DAF110));
+        assert_eq!(frame_ext.dlc, 3);
+        assert_eq!(frame_ext.data.as_ref(), &[0x02, 0x01, 0x00]);
+
+        // Remote transmission request (r)
+        let rtr_line = "   0.003000 1  7DF             Rx   r 0";
+        let (_, frame_rtr) = parse_asc_line(rtr_line).expect("Parsed RTR line");
+        assert!(frame_rtr.is_rtr);
+        assert_eq!(frame_rtr.dlc, 0);
+    }
+
+    #[test]
+    fn test_parse_asc_canfd_lines() {
+        // Standard CAN-FD line without BRS
+        let fd_line =
+            "   0.004000 CANFD   1 Rx        7df                                      0 0  8  8 02 01 05 00 00 00 00 00";
+        let (ts_fd, frame_fd) = parse_asc_line(fd_line).expect("Parsed CAN-FD standard");
+        assert_eq!(ts_fd, 4000);
+        assert_eq!(frame_fd.id, CanId::Standard(0x7DF));
+        assert!(frame_fd.is_fd);
+        assert!(!frame_fd.brs);
+        assert!(!frame_fd.esi);
+        assert_eq!(frame_fd.dlc, 8);
+        assert_eq!(
+            frame_fd.data.as_ref(),
+            &[0x02, 0x01, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00]
+        );
+
+        // Extended CAN-FD line with BRS = 1
+        let fd_ext_line =
+            "   0.005500 CANFD   1 Rx        18DAF110x                                1 0 16 16 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F";
+        let (ts_ext_fd, frame_ext_fd) =
+            parse_asc_line(fd_ext_line).expect("Parsed CAN-FD extended");
+        assert_eq!(ts_ext_fd, 5500);
+        assert_eq!(frame_ext_fd.id, CanId::Extended(0x18DAF110));
+        assert!(frame_ext_fd.is_fd);
+        assert!(frame_ext_fd.brs);
+        assert!(!frame_ext_fd.esi);
+        assert_eq!(frame_ext_fd.dlc, 16);
+        assert_eq!(frame_ext_fd.data.len(), 16);
+        assert_eq!(frame_ext_fd.data[0], 0x00);
+        assert_eq!(frame_ext_fd.data[15], 0x0F);
+    }
+
+    #[test]
+    fn test_parse_asc_full_log() {
+        let asc_log = r#"
+date Mon Oct 17 12:00:00 2026
+base hex timestamps absolute
+internal events logged
+// version 8.1.0
+Begin TriggerBlock 
+   0.001000 1  100             Rx   d 2 AA BB
+   0.002000 1  200             Rx   d 1 CC
+   0.003000 CANFD   1 Rx 300 1 0 4 4 11 22 33 44
+End TriggerBlock
+"#;
+
+        let events = parse_asc_log(asc_log).expect("Parsed ASC log");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].timestamp_us, 1000);
+        assert_eq!(events[1].timestamp_us, 2000);
+        assert_eq!(events[2].timestamp_us, 3000);
     }
 }
