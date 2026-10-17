@@ -175,14 +175,59 @@ impl DashboardState {
             self.active_tab = 3;
         }
     }
+
+    /// Ingest a live or replayed RawBusEvent into the inference and compliance pipelines
+    pub fn ingest_event(&mut self, event: &fp_core::RawBusEvent) {
+        self.frame_count += 1;
+        match &event.payload {
+            fp_core::RawFrame::Can(frame) => {
+                self.engine.ingest_can_frame(frame, event.timestamp_us);
+            }
+            fp_core::RawFrame::Serial(chunk) => {
+                let matches = fp_autodetect::scan_modbus_rtu_frames(&chunk.data);
+                for (start, len) in matches {
+                    let slice = &chunk.data[start..start + len];
+                    if let Some(adu) = fp_dissectors::parse_modbus_rtu_frame(slice) {
+                        self.engine.ingest_modbus_frame(&adu, event.timestamp_us);
+                        self.compliance.audit_modbus_adu(&adu);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Run the interactive Ratatui TUI dashboard
-pub fn run_interactive_dashboard(mut app: DashboardState) -> io::Result<()> {
+#[allow(dead_code)]
+pub fn run_interactive_dashboard(app: DashboardState) -> io::Result<()> {
+    run_interactive_dashboard_with_rx(app, None)
+}
+
+/// Run the interactive Ratatui TUI dashboard, optionally bound to a live or replayed bus receiver
+pub fn run_interactive_dashboard_with_rx(
+    mut app: DashboardState,
+    mut rx_opt: Option<tokio::sync::broadcast::Receiver<fp_core::RawBusEvent>>,
+) -> io::Result<()> {
     // If output or input is not a terminal (e.g. CI, piped, scripts), fall back to ANSI renderer
     if !stdout().is_terminal() || !io::stdin().is_terminal() {
-        for _ in 0..6 {
-            app.simulate_tick();
+        if let Some(ref mut rx) = rx_opt {
+            let mut drained = 0;
+            while let Ok(event) = rx.try_recv() {
+                app.ingest_event(&event);
+                drained += 1;
+                if drained >= 10 {
+                    break;
+                }
+            }
+            if drained == 0 {
+                for _ in 0..6 {
+                    app.simulate_tick();
+                }
+            }
+        } else {
+            for _ in 0..6 {
+                app.simulate_tick();
+            }
         }
         return render_dashboard(
             &app.engine,
@@ -201,9 +246,11 @@ pub fn run_interactive_dashboard(mut app: DashboardState) -> io::Result<()> {
     let backend = CrosstermBackend::new(out);
     let mut terminal = Terminal::new(backend)?;
 
-    // Populate initial baseline data
-    for _ in 0..4 {
-        app.simulate_tick();
+    // Populate initial baseline data if no live feed attached
+    if rx_opt.is_none() {
+        for _ in 0..4 {
+            app.simulate_tick();
+        }
     }
 
     while app.running {
@@ -242,8 +289,20 @@ pub fn run_interactive_dashboard(mut app: DashboardState) -> io::Result<()> {
             }
         }
 
-        // Advance simulation tick
-        app.simulate_tick();
+        // Drain incoming events from hardware / replay or advance simulation tick
+        if let Some(ref mut rx) = rx_opt {
+            let mut got_events = false;
+            while let Ok(event) = rx.try_recv() {
+                app.ingest_event(&event);
+                got_events = true;
+            }
+            if !got_events && app.frame_count == 0 {
+                // Keep initial baseline active until hardware produces events
+                app.simulate_tick();
+            }
+        } else {
+            app.simulate_tick();
+        }
     }
 
     Ok(())

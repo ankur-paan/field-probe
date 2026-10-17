@@ -364,6 +364,45 @@ impl SlcanDriver {
             let _ = self.tx_sender.send(event);
         }
     }
+
+    /// Spawn an asynchronous background reader loop on tokio.
+    /// Reads ASCII stream from any AsyncRead source, feeds into SlcanCodec,
+    /// and broadcasts decoded CanFrames as RawBusEvents.
+    pub fn spawn_reader_loop<R>(&self, mut reader: R) -> tokio::task::JoinHandle<()>
+    where
+        R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    {
+        use tokio::io::AsyncReadExt;
+        let tx_sender = self.tx_sender.clone();
+        let interface_name = self.interface_name.clone();
+        let link_params = self.link_params.clone();
+
+        tokio::spawn(async move {
+            let mut buf = [0u8; 512];
+            let mut codec = SlcanCodec::new();
+
+            loop {
+                match reader.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let now_utc = chrono::Utc::now();
+                        let timestamp_us = now_utc.timestamp_micros().max(0) as u64;
+                        let frames = codec.feed_bytes(&buf[..n]);
+                        for frame in frames {
+                            let event = RawBusEvent::new_can_rx(
+                                &interface_name,
+                                timestamp_us,
+                                link_params.clone(),
+                                frame,
+                            );
+                            let _ = tx_sender.send(event);
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
+    }
 }
 
 #[async_trait]

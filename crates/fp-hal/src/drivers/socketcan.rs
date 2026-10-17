@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use fp_core::{
-    AdapterCapabilities, BusErrorFlags, CanFrame, HalError, IndustrialChip, LinkParams,
+    AdapterCapabilities, BusErrorFlags, CanFrame, CanId, HalError, IndustrialChip, LinkParams,
     OutboundFrame, RawBusEvent, RawFrame, SafetyPermit, SafetyTier,
 };
 use tokio::sync::broadcast;
@@ -78,6 +78,95 @@ impl SocketCanDriver {
             error_flags,
         };
         let _ = self.tx_sender.send(event);
+    }
+
+    /// Spawn an asynchronous background reader loop on tokio.
+    /// Reads CanFrames from a raw Linux CAN socket stream (16-byte struct can_frame),
+    /// translating error frames and broadcasting RawBusEvents.
+    pub fn spawn_reader_loop<R>(&self, mut reader: R) -> tokio::task::JoinHandle<()>
+    where
+        R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    {
+        use tokio::io::AsyncReadExt;
+        let tx_sender = self.tx_sender.clone();
+        let interface_name = self.interface_name.clone();
+        let link_params = self.link_params.clone();
+
+        tokio::spawn(async move {
+            let mut buf = [0u8; 16];
+            while reader.read_exact(&mut buf).await.is_ok() {
+                let can_id_raw = u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]);
+                let dlc = (buf[4] as usize).min(8);
+                let is_eff = (can_id_raw & 0x80000000) != 0;
+                let is_rtr = (can_id_raw & 0x40000000) != 0;
+                let is_err = (can_id_raw & 0x20000000) != 0;
+
+                let can_id = if is_eff {
+                    CanId::Extended(can_id_raw & 0x1FFFFFFF)
+                } else {
+                    CanId::Standard((can_id_raw & 0x7FF) as u16)
+                };
+
+                let data = bytes::Bytes::copy_from_slice(&buf[8..8 + dlc]);
+                let frame = CanFrame {
+                    id: can_id,
+                    dlc: dlc as u8,
+                    data,
+                    is_fd: false,
+                    is_rtr,
+                    is_error: is_err,
+                };
+
+                let error_flags = if is_err {
+                    Self::translate_linux_error_frame(&buf[8..8 + dlc])
+                } else {
+                    BusErrorFlags::default()
+                };
+
+                let now_utc = chrono::Utc::now();
+                let timestamp_us = now_utc.timestamp_micros().max(0) as u64;
+
+                let event = RawBusEvent {
+                    interface_id: interface_name.clone(),
+                    timestamp_us,
+                    link_params: link_params.clone(),
+                    payload: RawFrame::Can(frame),
+                    direction: fp_core::Direction::Rx,
+                    error_flags,
+                };
+                let _ = tx_sender.send(event);
+            }
+        })
+    }
+
+    /// Spawn an asynchronous worker loop that ingests CanFrames from an mpsc channel
+    pub fn spawn_frame_worker(&self, mut rx: tokio::sync::mpsc::Receiver<CanFrame>) -> tokio::task::JoinHandle<()> {
+        let tx_sender = self.tx_sender.clone();
+        let interface_name = self.interface_name.clone();
+        let link_params = self.link_params.clone();
+
+        tokio::spawn(async move {
+            while let Some(frame) = rx.recv().await {
+                let error_flags = if frame.is_error {
+                    Self::translate_linux_error_frame(&frame.data)
+                } else {
+                    BusErrorFlags::default()
+                };
+
+                let now_utc = chrono::Utc::now();
+                let timestamp_us = now_utc.timestamp_micros().max(0) as u64;
+
+                let event = RawBusEvent {
+                    interface_id: interface_name.clone(),
+                    timestamp_us,
+                    link_params: link_params.clone(),
+                    payload: RawFrame::Can(frame),
+                    direction: fp_core::Direction::Rx,
+                    error_flags,
+                };
+                let _ = tx_sender.send(event);
+            }
+        })
     }
 
     /// Translate Linux CAN error frame data payload (<linux/can/error.h>) into BusErrorFlags

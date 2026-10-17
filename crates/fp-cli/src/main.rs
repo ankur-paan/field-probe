@@ -1,10 +1,13 @@
 mod dashboard;
 
-use dashboard::{run_interactive_dashboard, DashboardState};
+use dashboard::{run_interactive_dashboard_with_rx, DashboardState};
 use fp_autodetect::score_serial_stream;
 use fp_core::{RawFrame, SafetyTier};
-use fp_dissectors::{ComplianceReport, ModbusPdu, ModbusRtuAdu};
-use fp_hal::{BusInterface, ReplayInterface};
+use fp_dissectors::{parse_modbus_rtu_frame, ComplianceReport, ModbusPdu, ModbusRtuAdu};
+use fp_hal::{
+    enumerate_dongles, load_replay_file, BusInterface, ReplayInterface, SerialDriver, SlcanDriver,
+    SocketCanDriver,
+};
 use fp_mcp::{get_tool_definitions, run_stdio_server, McpServerState};
 use fp_server::{run_server, ServerState};
 use std::env;
@@ -12,28 +15,80 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::time::{sleep, Duration};
 
+#[derive(Debug, Default)]
+struct CliArgs {
+    command: String,
+    interface: Option<String>,
+    replay: Option<String>,
+    positional: Vec<String>,
+}
+
+fn parse_cli_args() -> CliArgs {
+    let args: Vec<String> = env::args().collect();
+    let mut command = String::new();
+    let mut interface = None;
+    let mut replay = None;
+    let mut positional = Vec::new();
+
+    let mut i = 1;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--interface" || arg == "-i" {
+            if i + 1 < args.len() {
+                interface = Some(args[i + 1].clone());
+                i += 1;
+            }
+        } else if let Some(stripped) = arg.strip_prefix("--interface=") {
+            interface = Some(stripped.to_string());
+        } else if arg == "--replay" || arg == "-r" {
+            if i + 1 < args.len() {
+                replay = Some(args[i + 1].clone());
+                i += 1;
+            }
+        } else if let Some(stripped) = arg.strip_prefix("--replay=") {
+            replay = Some(stripped.to_string());
+        } else if command.is_empty() && !arg.starts_with('-') {
+            command = arg.clone();
+        } else {
+            positional.push(arg.clone());
+        }
+        i += 1;
+    }
+
+    if command.is_empty() {
+        command = "help".to_string();
+    }
+
+    CliArgs {
+        command,
+        interface,
+        replay,
+        positional,
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = env::args().collect();
-    let command = args.get(1).map(|s| s.as_str()).unwrap_or("help");
+    let cli = parse_cli_args();
 
-    match command {
-        "sniff" => run_sniff_command().await?,
-        "autodetect" => run_autodetect_command().await?,
-        "dashboard" => run_dashboard_command().await?,
+    match cli.command.as_str() {
+        "sniff" => run_sniff_command(cli.interface.as_deref(), cli.replay.as_deref()).await?,
+        "autodetect" => run_autodetect_command(cli.interface.as_deref(), cli.replay.as_deref()).await?,
+        "dashboard" => run_dashboard_command(cli.interface.as_deref(), cli.replay.as_deref()).await?,
         "mcp" => run_mcp_command().await?,
         "serve" => {
-            let port = args
-                .get(2)
+            let port = cli
+                .positional
+                .first()
                 .and_then(|s| s.parse::<u16>().ok())
                 .unwrap_or(8080);
             run_serve_command(port).await?;
         }
         "dongles" => run_dongles_command(),
-        "audit" => run_audit_command().await?,
+        "audit" => run_audit_command(cli.replay.as_deref()).await?,
         "export" => {
-            let format = args.get(2).map(|s| s.as_str()).unwrap_or("json");
-            run_export_command(format).await?;
+            let format = cli.positional.first().map(|s| s.as_str()).unwrap_or("json");
+            run_export_command(format, cli.replay.as_deref()).await?;
         }
         "version" | "-v" | "--version" => print_version(),
         _ => print_help(),
@@ -68,6 +123,9 @@ fn print_help() {
     println!("  export      Export discovered registers and signals (<dbc|pcapng|telegraf|nodered|json>)");
     println!("  version     Display version and safety tier invariants");
     println!("  help        Display this help message\n");
+    println!("OPTIONS:");
+    println!("  -i, --interface <ID>    Bind directly to physical/virtual interface (e.g. can0, slcan0, COM3)");
+    println!("  -r, --replay <FILE>     Replay events from capture file (.pcapng, candump log, or raw binary)\n");
     println!("SAFETY INVARIANT:");
     println!("  All interfaces default strictly to Tier-0 PassiveListenOnly (Zero-TX).");
     println!("==========================================================================");
@@ -76,7 +134,7 @@ fn print_help() {
 fn run_dongles_command() {
     println!("Enumerate Industrial Hardware Interfaces:");
     println!("--------------------------------------------------------------------------");
-    let dongles = fp_hal::enumerate_dongles();
+    let dongles = enumerate_dongles();
 
     for d in dongles {
         println!(
@@ -88,17 +146,51 @@ fn run_dongles_command() {
     println!("Current Mode: Tier-0 PassiveListenOnly (Zero-TX Enforced)");
 }
 
-async fn run_sniff_command() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting passive bus sniffer on interface 'vbus0' (Tier-0 Zero-TX)...");
-    println!("TIMESTAMP (us)  DIR   LENGTH (bytes)");
-    println!("--------------------------------------------------------------------------");
+async fn get_event_receiver(
+    interface: Option<&str>,
+    replay: Option<&str>,
+) -> Result<
+    (
+        tokio::sync::broadcast::Receiver<fp_core::RawBusEvent>,
+        Option<tokio::task::JoinHandle<()>>,
+        String,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    if let Some(replay_path) = replay {
+        let events = load_replay_file(replay_path)?;
+        let count = events.len();
+        let replay_if = ReplayInterface::new(format!("replay:{}", replay_path), 256);
+        let rx = replay_if.subscribe_rx();
+        let handle = replay_if.spawn_file_replay(events, false);
+        let label = format!("Replay '{}' ({} events loaded)", replay_path, count);
+        return Ok((rx, Some(handle), label));
+    }
 
-    let replay = ReplayInterface::new("vbus0", 64);
-    let mut rx = replay.subscribe_rx();
+    if let Some(if_id) = interface {
+        if if_id.starts_with("can") || if_id.starts_with("vcan") {
+            let driver = SocketCanDriver::new(if_id);
+            let rx = driver.subscribe_rx();
+            let label = format!("SocketCAN interface '{}' (Tier-0 Listen-Only)", if_id);
+            return Ok((rx, None, label));
+        } else if if_id.starts_with("slcan") {
+            let driver = SlcanDriver::new(if_id, 500_000, 256);
+            let rx = driver.subscribe_rx();
+            let label = format!("SLCAN interface '{}' (Tier-0 Listen-Only)", if_id);
+            return Ok((rx, None, label));
+        } else {
+            let driver = SerialDriver::new(if_id);
+            let rx = driver.subscribe_rx();
+            let label = format!("Serial interface '{}' (Tier-0 Zero-TX)", if_id);
+            return Ok((rx, None, label));
+        }
+    }
 
-    // Stream synthetic Modbus traffic
-    let replay_clone = replay.clone();
-    tokio::spawn(async move {
+    // Default: synthetic replay stream
+    let replay_if = ReplayInterface::new("vbus0", 64);
+    let rx = replay_if.subscribe_rx();
+    let replay_clone = replay_if.clone();
+    let handle = tokio::spawn(async move {
         let mut t = 1_000_000u64;
         let query_bytes = [0x01, 0x03, 0x9C, 0x41, 0x00, 0x02, 0x8A, 0x38];
         let resp_bytes = [0x01, 0x03, 0x04, 0x99, 0x9A, 0x41, 0xBB, 0xD4, 0x3C];
@@ -110,15 +202,38 @@ async fn run_sniff_command() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    Ok((
+        rx,
+        Some(handle),
+        "Synthetic interface 'vbus0' (Tier-0 Zero-TX)".to_string(),
+    ))
+}
+
+async fn run_sniff_command(
+    interface: Option<&str>,
+    replay: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (mut rx, _handle, label) = get_event_receiver(interface, replay).await?;
+    println!("Starting passive bus sniffer on {}...", label);
+    println!("TIMESTAMP (us)  DIR   INTERFACE   LENGTH   PAYLOAD PREVIEW");
+    println!("--------------------------------------------------------------------------");
+
     let mut count = 0;
     while let Ok(event) = rx.recv().await {
-        let byte_count = match &event.payload {
-            RawFrame::Serial(chunk) => chunk.data.len(),
-            RawFrame::Can(frame) => frame.data.len(),
+        let (byte_count, preview) = match &event.payload {
+            RawFrame::Serial(chunk) => {
+                let hex_str: Vec<String> = chunk.data.iter().take(8).map(|b| format!("{:02X}", b)).collect();
+                (chunk.data.len(), format!("[{}]", hex_str.join(" ")))
+            }
+            RawFrame::Can(frame) => {
+                let hex_str: Vec<String> = frame.data.iter().take(8).map(|b| format!("{:02X}", b)).collect();
+                (frame.data.len(), format!("ID:0x{:X} [{}]", frame.id.as_raw(), hex_str.join(" ")))
+            }
         };
+
         println!(
-            "{:<14}  {:?}   {} bytes",
-            event.timestamp_us, event.direction, byte_count
+            "{:<14}  {:?}   {:<10}  {:<3} B   {}",
+            event.timestamp_us, event.direction, event.interface_id, byte_count, preview
         );
         count += 1;
         if count >= 6 {
@@ -126,34 +241,90 @@ async fn run_sniff_command() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("Sniff complete. Captured frames with 0 transmitted bits.");
+    println!("--------------------------------------------------------------------------");
+    println!("Sniff complete. Captured frames with 0 transmitted bits (Tier-0).");
     Ok(())
 }
 
-async fn run_autodetect_command() -> Result<(), Box<dyn std::error::Error>> {
+async fn run_autodetect_command(
+    interface: Option<&str>,
+    replay: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Running passive bus auto-detection (Tier-0 Zero-TX)...");
 
-    let valid_frame = [0x01, 0x03, 0x04, 0x00, 0x17, 0x00, 0x2A, 0x34, 0x5D];
-    let score = score_serial_stream(&valid_frame, 9600);
+    let (score, source_label) = if let Some(path) = replay {
+        let events = load_replay_file(path)?;
+        let mut bytes = Vec::new();
+        for ev in &events {
+            match &ev.payload {
+                RawFrame::Serial(s) => bytes.extend_from_slice(&s.data),
+                RawFrame::Can(c) => bytes.extend_from_slice(&c.data),
+            }
+        }
+        let score = score_serial_stream(&bytes, 9600);
+        (score, format!("Replay '{}'", path))
+    } else if let Some(if_id) = interface {
+        let (mut rx, _handle, _) = get_event_receiver(Some(if_id), None).await?;
+        let mut bytes = Vec::new();
+        let timeout = tokio::time::sleep(Duration::from_millis(200));
+        tokio::pin!(timeout);
+
+        loop {
+            tokio::select! {
+                Ok(ev) = rx.recv() => {
+                    match ev.payload {
+                        RawFrame::Serial(s) => bytes.extend_from_slice(&s.data),
+                        RawFrame::Can(c) => bytes.extend_from_slice(&c.data),
+                    }
+                    if bytes.len() >= 64 {
+                        break;
+                    }
+                }
+                _ = &mut timeout => break,
+            }
+        }
+        let score = score_serial_stream(&bytes, 9600);
+        (score, format!("Interface '{}'", if_id))
+    } else {
+        let valid_frame = [0x01, 0x03, 0x04, 0x00, 0x17, 0x00, 0x2A, 0x34, 0x5D];
+        let score = score_serial_stream(&valid_frame, 9600);
+        (score, "Simulated serial bus".to_string())
+    };
 
     println!("--------------------------------------------------------------------------");
+    println!("  Data Source:           {}", source_label);
     println!("  Estimated Baud Rate:   {} bps", score.baud_rate);
     println!("  Framing Format:        8N1 (8 Data Bits, No Parity, 1 Stop Bit)");
     println!("  Confidence Score:      {:.2}", score.confidence);
     println!("  Detected Protocol:     {:?}", score.candidate_protocol);
     println!("  Valid CRC Frames:      {}", score.valid_crc_count);
+    if let Some(ref hyp) = score.unknown_hypothesis {
+        println!("  Unknown Framer:        Discovered {}-byte frame hypothesis", hyp.frame_length);
+        if let Some(ref crc) = hyp.detected_crc_type {
+            println!("  Checksum Algorithm:    {}", crc);
+        }
+        println!("  Inferred Fields:       {} distinct regions", hyp.fields.len());
+        for f in &hyp.fields {
+            println!("    - [0x{:02X}..0x{:02X}] {:<18} {}", f.start_byte, f.start_byte + f.length, f.field_type.name(), f.description);
+        }
+    }
     println!("  Status:                LOCKED (Passive sniffing verified)");
     println!("--------------------------------------------------------------------------");
     Ok(())
 }
 
-async fn run_dashboard_command() -> Result<(), Box<dyn std::error::Error>> {
-    let state = DashboardState::new(
+async fn run_dashboard_command(
+    interface: Option<&str>,
+    replay: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (rx, _handle, label) = get_event_receiver(interface, replay).await?;
+    let mut state = DashboardState::new(
         SafetyTier::PassiveListenOnly,
         "Modbus / CAN",
         500_000,
     );
-    run_interactive_dashboard(state)?;
+    state.status_message = format!("Active: {} (Zero-TX)", label);
+    run_interactive_dashboard_with_rx(state, Some(rx))?;
     Ok(())
 }
 
@@ -182,29 +353,45 @@ async fn run_serve_command(port: u16) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
-async fn run_audit_command() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Running compliance audit on simulated industrial traffic...");
+async fn run_audit_command(replay: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     let mut report = ComplianceReport::new();
 
-    let valid_adu = ModbusRtuAdu {
-        slave_id: 1,
-        pdu: ModbusPdu::ReadHoldingRegistersQuery {
-            start_addr: 40001,
-            quantity: 2,
-        },
-        crc16: 0,
-    };
-    report.audit_modbus_adu(&valid_adu);
+    if let Some(path) = replay {
+        println!("Running compliance audit on capture replay file '{}'...", path);
+        let events = load_replay_file(path)?;
+        for ev in &events {
+            if let RawFrame::Serial(chunk) = &ev.payload {
+                let matches = fp_autodetect::scan_modbus_rtu_frames(&chunk.data);
+                for (start, len) in matches {
+                    let slice = &chunk.data[start..start + len];
+                    if let Some(adu) = parse_modbus_rtu_frame(slice) {
+                        report.audit_modbus_adu(&adu);
+                    }
+                }
+            }
+        }
+    } else {
+        println!("Running compliance audit on simulated industrial traffic...");
+        let valid_adu = ModbusRtuAdu {
+            slave_id: 1,
+            pdu: ModbusPdu::ReadHoldingRegistersQuery {
+                start_addr: 40001,
+                quantity: 2,
+            },
+            crc16: 0,
+        };
+        report.audit_modbus_adu(&valid_adu);
 
-    let invalid_adu = ModbusRtuAdu {
-        slave_id: 1,
-        pdu: ModbusPdu::ReadHoldingRegistersQuery {
-            start_addr: 65530,
-            quantity: 10,
-        },
-        crc16: 0,
-    };
-    report.audit_modbus_adu(&invalid_adu);
+        let invalid_adu = ModbusRtuAdu {
+            slave_id: 1,
+            pdu: ModbusPdu::ReadHoldingRegistersQuery {
+                start_addr: 65530,
+                quantity: 10,
+            },
+            crc16: 0,
+        };
+        report.audit_modbus_adu(&invalid_adu);
+    }
 
     println!("--------------------------------------------------------------------------");
     println!("Compliance Audit Report:");
@@ -220,18 +407,41 @@ async fn run_audit_command() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn run_export_command(format: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_export_command(format: &str, replay: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     println!("Exporting field-probe telemetry artifacts in '{}' format...", format);
     let mut catalog = fp_inference::RegisterCatalog::new();
-    catalog.insert_or_update(fp_inference::InferredRegisterEntry {
-        node_or_slave: "Slave1".into(),
-        address: 40001,
-        polling_frequency_hz: 5.0,
-        jitter_ms: 0.8,
-        raw_hex: "42F6E666".into(),
-        plausible_type: "Float32_CDAB".into(),
-        confidence: 0.95,
-    });
+
+    if let Some(path) = replay {
+        let events = load_replay_file(path)?;
+        let mut engine = fp_inference::InferenceEngine::new(9600, 1000);
+        for ev in &events {
+            match &ev.payload {
+                RawFrame::Can(c) => {
+                    let _ = engine.ingest_can_frame(c, ev.timestamp_us);
+                }
+                RawFrame::Serial(s) => {
+                    let matches = fp_autodetect::scan_modbus_rtu_frames(&s.data);
+                    for (start, len) in matches {
+                        let slice = &s.data[start..start + len];
+                        if let Some(adu) = parse_modbus_rtu_frame(slice) {
+                            engine.ingest_modbus_frame(&adu, ev.timestamp_us);
+                        }
+                    }
+                }
+            }
+        }
+        catalog = engine.catalog;
+    } else {
+        catalog.insert_or_update(fp_inference::InferredRegisterEntry {
+            node_or_slave: "Slave1".into(),
+            address: 40001,
+            polling_frequency_hz: 5.0,
+            jitter_ms: 0.8,
+            raw_hex: "42F6E666".into(),
+            plausible_type: "Float32_CDAB".into(),
+            confidence: 0.95,
+        });
+    }
 
     let content = match format.to_lowercase().as_str() {
         "dbc" => {

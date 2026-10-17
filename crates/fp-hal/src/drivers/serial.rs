@@ -86,6 +86,48 @@ impl SerialDriver {
     pub fn can_transmit(&self) -> bool {
         self.safety_tier != SafetyTier::PassiveListenOnly
     }
+
+    /// Spawn an asynchronous background reader loop on tokio.
+    /// Reads chunks from any AsyncRead source, measuring inter-frame timing gaps,
+    /// and broadcasting decoded RawBusEvents.
+    pub fn spawn_reader_loop<R>(&self, mut reader: R) -> tokio::task::JoinHandle<()>
+    where
+        R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    {
+        use tokio::io::AsyncReadExt;
+        let tx_sender = self.tx_sender.clone();
+        let port_name = self.port_name.clone();
+        let current_params = self.current_params;
+
+        tokio::spawn(async move {
+            let mut buf = [0u8; 1024];
+            let mut last_instant: Option<Instant> = None;
+
+            loop {
+                match reader.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let now_instant = Instant::now();
+                        let gap = last_instant.map(|prev| now_instant.duration_since(prev).as_micros() as u64);
+                        last_instant = Some(now_instant);
+
+                        let now_utc = chrono::Utc::now();
+                        let timestamp_us = now_utc.timestamp_micros().max(0) as u64;
+
+                        let chunk = TimestampedChunk::new(bytes::Bytes::copy_from_slice(&buf[..n]), gap);
+                        let event = RawBusEvent::new_serial_rx(
+                            &port_name,
+                            timestamp_us,
+                            LinkParams::Serial(current_params),
+                            chunk,
+                        );
+                        let _ = tx_sender.send(event);
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
+    }
 }
 
 #[async_trait]
