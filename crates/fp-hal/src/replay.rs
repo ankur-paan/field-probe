@@ -214,7 +214,8 @@ impl BusInterface for ReplayInterface {
     }
 }
 
-/// Parse Wireshark PCAP-NG binary buffer into RawBusEvent items
+/// Parse Wireshark PCAP-NG binary buffer into RawBusEvent items,
+/// tracking per-interface LinkType (227 = SocketCAN, 147/250/274 = Serial/Modbus).
 pub fn parse_pcapng_events(bytes: &[u8]) -> Result<Vec<RawBusEvent>, HalError> {
     if bytes.len() < 28 {
         return Err(HalError::Io("PCAP-NG file too small".to_string()));
@@ -225,6 +226,7 @@ pub fn parse_pcapng_events(bytes: &[u8]) -> Result<Vec<RawBusEvent>, HalError> {
     }
 
     let mut events = Vec::new();
+    let mut interface_link_types: Vec<u16> = Vec::new();
     let mut offset = 0;
 
     while offset + 8 <= bytes.len() {
@@ -244,8 +246,17 @@ pub fn parse_pcapng_events(bytes: &[u8]) -> Result<Vec<RawBusEvent>, HalError> {
             break;
         }
 
-        // EPB block type = 0x00000006
-        if block_type == 0x00000006 && block_len >= 32 {
+        // Section Header Block (0x0A0D0D0A): reset interface table for new section
+        if block_type == 0x0A0D0D0A {
+            interface_link_types.clear();
+        }
+        // Interface Description Block (IDB = 0x00000001): record LinkType
+        else if block_type == 0x00000001 && block_len >= 16 {
+            let link_type = u16::from_le_bytes([bytes[offset + 8], bytes[offset + 9]]);
+            interface_link_types.push(link_type);
+        }
+        // Enhanced Packet Block (EPB = 0x00000006)
+        else if block_type == 0x00000006 && block_len >= 32 {
             let if_id = u32::from_le_bytes([
                 bytes[offset + 8],
                 bytes[offset + 9],
@@ -274,7 +285,12 @@ pub fn parse_pcapng_events(bytes: &[u8]) -> Result<Vec<RawBusEvent>, HalError> {
 
             if offset + 28 + cap_len <= offset + block_len {
                 let packet_data = &bytes[offset + 28..offset + 28 + cap_len];
-                if if_id == 0 && cap_len >= 8 {
+                let link_type = interface_link_types
+                    .get(if_id as usize)
+                    .copied()
+                    .unwrap_or(227);
+
+                if link_type == 227 && cap_len >= 8 {
                     // SocketCAN
                     let can_id_raw = u32::from_be_bytes([
                         packet_data[0],
@@ -302,13 +318,13 @@ pub fn parse_pcapng_events(bytes: &[u8]) -> Result<Vec<RawBusEvent>, HalError> {
                         id: can_id,
                         dlc: dlc as u8,
                         data,
-                        is_fd: false,
+                        is_fd: dlc > 8,
                         is_rtr,
                         is_error: is_err,
                     };
 
                     events.push(RawBusEvent {
-                        interface_id: "can0".to_string(),
+                        interface_id: format!("can{}", if_id),
                         timestamp_us: ts_us,
                         link_params: LinkParams::Can(Default::default()),
                         payload: RawFrame::Can(frame),
@@ -316,10 +332,10 @@ pub fn parse_pcapng_events(bytes: &[u8]) -> Result<Vec<RawBusEvent>, HalError> {
                         error_flags: Default::default(),
                     });
                 } else {
-                    // Serial RTAC or other
+                    // Serial RTAC, Modbus, BACnet, DNP3
                     let chunk = TimestampedChunk::new(packet_data.to_vec(), None);
                     events.push(RawBusEvent::new_serial_rx(
-                        "serial0",
+                        format!("serial{}", if_id),
                         ts_us,
                         LinkParams::Serial(Default::default()),
                         chunk,
@@ -730,4 +746,57 @@ mod tests {
             panic!("Expected CAN frame");
         }
     }
+
+    #[test]
+    fn test_pcapng_serial_link_type_parsing() {
+        let mut bytes = Vec::new();
+        // 1. SHB (28 bytes)
+        bytes.extend_from_slice(&0x0A0D0D0Au32.to_le_bytes());
+        bytes.extend_from_slice(&28u32.to_le_bytes());
+        bytes.extend_from_slice(&0x1A2B3C4Du32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&0xFFFFFFFFFFFFFFFFu64.to_le_bytes());
+        bytes.extend_from_slice(&28u32.to_le_bytes());
+
+        // 2. IDB 0 with LinkType 250 (RTAC Serial / RS-485)
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&20u32.to_le_bytes());
+        bytes.extend_from_slice(&250u16.to_le_bytes()); // LinkType = 250
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&65535u32.to_le_bytes());
+        bytes.extend_from_slice(&20u32.to_le_bytes());
+
+        // 3. EPB with 8-byte Modbus RTU frame
+        let packet = vec![0x01, 0x03, 0x00, 0x00, 0x00, 0x02, 0xC4, 0x0B];
+        let cap_len = packet.len() as u32;
+        let pad_len = (4 - (cap_len % 4)) % 4;
+        let epb_len = 32 + cap_len + pad_len;
+
+        bytes.extend_from_slice(&6u32.to_le_bytes());
+        bytes.extend_from_slice(&epb_len.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // if_id = 0
+        let ts_us: u64 = 2_000_000;
+        bytes.extend_from_slice(&((ts_us >> 32) as u32).to_le_bytes());
+        bytes.extend_from_slice(&((ts_us & 0xFFFFFFFF) as u32).to_le_bytes());
+        bytes.extend_from_slice(&cap_len.to_le_bytes());
+        bytes.extend_from_slice(&cap_len.to_le_bytes());
+        bytes.extend_from_slice(&packet);
+        bytes.resize(bytes.len() + pad_len as usize, 0);
+        bytes.extend_from_slice(&epb_len.to_le_bytes());
+
+        let parsed = parse_pcapng_events(&bytes).expect("Parsed Serial PCAP-NG");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].interface_id, "serial0");
+        assert_eq!(parsed[0].timestamp_us, 2_000_000);
+        if let RawFrame::Serial(chunk) = &parsed[0].payload {
+            assert_eq!(
+                chunk.data,
+                vec![0x01, 0x03, 0x00, 0x00, 0x00, 0x02, 0xC4, 0x0B]
+            );
+        } else {
+            panic!("Expected Serial frame, got CAN frame");
+        }
+    }
 }
+

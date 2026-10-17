@@ -363,14 +363,14 @@ struct CrcMatchResult {
     width: usize, // in bytes (1 or 2)
 }
 
-/// Probe trailing bytes against common checksum and CRC algorithms
+/// Probe trailing bytes against 8 common industrial checksum and CRC algorithms
 fn detect_trailing_checksum(matrix: &[&[u8]]) -> Option<CrcMatchResult> {
     if matrix.is_empty() || matrix[0].len() < 4 {
         return None;
     }
     let len = matrix[0].len();
 
-    // 1. Check 8-bit Additive Sum (sum of 0..len-1 % 256 == last byte)
+    // 1. 8-bit Additive Sum (sum of 0..len-1 % 256 == last byte)
     let sum_matched = matrix.iter().all(|row| {
         let sum: u8 = row[..len - 1]
             .iter()
@@ -384,7 +384,18 @@ fn detect_trailing_checksum(matrix: &[&[u8]]) -> Option<CrcMatchResult> {
         });
     }
 
-    // 2. Check 8-bit XOR Checksum (XOR of 0..len-1 == last byte)
+    // 2. 8-bit Two's Complement LRC (Modbus ASCII style: (!sum) + 1 == last byte)
+    let lrc_twos_matched = matrix.iter().all(|row| {
+        crate::crc::modbus_ascii_lrc(&row[..len - 1]) == row[len - 1]
+    });
+    if lrc_twos_matched {
+        return Some(CrcMatchResult {
+            name: "Two's Complement LRC-8".to_string(),
+            width: 1,
+        });
+    }
+
+    // 3. 8-bit XOR Checksum (XOR of 0..len-1 == last byte)
     let xor_matched = matrix.iter().all(|row| {
         let xor: u8 = row[..len - 1].iter().fold(0u8, |acc, &b| acc ^ b);
         xor == row[len - 1]
@@ -396,7 +407,18 @@ fn detect_trailing_checksum(matrix: &[&[u8]]) -> Option<CrcMatchResult> {
         });
     }
 
-    // 3. Check Modbus RTU CRC-16 (reflected 0xA001)
+    // 4. BACnet MS/TP CRC-8 (polynomial 0x11D reflected 0x8C)
+    let bacnet_crc8_matched = matrix.iter().all(|row| {
+        crate::crc::bacnet_crc8(&row[..len - 1]) == row[len - 1]
+    });
+    if bacnet_crc8_matched {
+        return Some(CrcMatchResult {
+            name: "CRC-8/BACnet (0x8C)".to_string(),
+            width: 1,
+        });
+    }
+
+    // 5. Modbus RTU CRC-16 (reflected 0xA001, Little-Endian trailer)
     let modbus_crc_matched = matrix
         .iter()
         .all(|row| crate::crc::verify_modbus_rtu_crc16(row));
@@ -407,15 +429,39 @@ fn detect_trailing_checksum(matrix: &[&[u8]]) -> Option<CrcMatchResult> {
         });
     }
 
-    // 4. Check CCITT CRC-16 (polynomial 0x1021)
-    let ccitt_crc_matched = matrix.iter().all(|row| {
+    // 6. DNP3 CRC-16 (IEEE 1815 reflected 0xA6BC, Little-Endian trailer)
+    let dnp3_crc_matched = matrix
+        .iter()
+        .all(|row| crate::crc::verify_dnp3_crc16(row));
+    if dnp3_crc_matched {
+        return Some(CrcMatchResult {
+            name: "CRC-16/DNP3 (0xA6BC LE)".to_string(),
+            width: 2,
+        });
+    }
+
+    // 7. CCITT CRC-16 Big-Endian (polynomial 0x1021, init 0xFFFF)
+    let ccitt_be_matched = matrix.iter().all(|row| {
         let expected = compute_crc16_ccitt(&row[..len - 2]);
         let actual = u16::from_be_bytes([row[len - 2], row[len - 1]]);
         expected == actual
     });
-    if ccitt_crc_matched {
+    if ccitt_be_matched {
         return Some(CrcMatchResult {
             name: "CRC-16/CCITT (0x1021)".to_string(),
+            width: 2,
+        });
+    }
+
+    // 8. CCITT CRC-16 Little-Endian (polynomial 0x1021, init 0xFFFF)
+    let ccitt_le_matched = matrix.iter().all(|row| {
+        let expected = compute_crc16_ccitt(&row[..len - 2]);
+        let actual = u16::from_le_bytes([row[len - 2], row[len - 1]]);
+        expected == actual
+    });
+    if ccitt_le_matched {
+        return Some(CrcMatchResult {
+            name: "CRC-16/CCITT (0x1021 LE)".to_string(),
             width: 2,
         });
     }
@@ -518,4 +564,60 @@ mod tests {
         assert_eq!(frames[0], vec![0xAA, 0x55, 0x01, 0x02, 0x03, 0x04]);
         assert_eq!(frames[1], vec![0xAA, 0x55, 0x01, 0x03, 0x05, 0x06]);
     }
+
+    #[test]
+    fn test_unknown_framer_detects_all_checksum_types() {
+        // 1. Two's Complement LRC-8
+        let mut lrc_frames = Vec::new();
+        for i in 0..4u8 {
+            let mut f = vec![0x3A, 0x01, 0x03, i, 0x10];
+            let lrc = crate::crc::modbus_ascii_lrc(&f);
+            f.push(lrc);
+            lrc_frames.push(f);
+        }
+        let refs: Vec<&[u8]> = lrc_frames.iter().map(|v| v.as_slice()).collect();
+        let res = detect_trailing_checksum(&refs).unwrap();
+        assert_eq!(res.name, "Two's Complement LRC-8");
+        assert_eq!(res.width, 1);
+
+        // 2. BACnet CRC-8
+        let mut bacnet_frames = Vec::new();
+        for i in 0..4u8 {
+            let mut f = vec![0x55, 0xFF, 0x01, i];
+            let crc = crate::crc::bacnet_crc8(&f);
+            f.push(crc);
+            bacnet_frames.push(f);
+        }
+        let refs: Vec<&[u8]> = bacnet_frames.iter().map(|v| v.as_slice()).collect();
+        let res = detect_trailing_checksum(&refs).unwrap();
+        assert_eq!(res.name, "CRC-8/BACnet (0x8C)");
+        assert_eq!(res.width, 1);
+
+        // 3. DNP3 CRC-16
+        let mut dnp3_frames = Vec::new();
+        for i in 0..4u8 {
+            let mut f = vec![0x05, 0x64, 0x05, i];
+            let crc = crate::crc::dnp3_crc16(&f);
+            f.extend_from_slice(&crc.to_le_bytes());
+            dnp3_frames.push(f);
+        }
+        let refs: Vec<&[u8]> = dnp3_frames.iter().map(|v| v.as_slice()).collect();
+        let res = detect_trailing_checksum(&refs).unwrap();
+        assert_eq!(res.name, "CRC-16/DNP3 (0xA6BC LE)");
+        assert_eq!(res.width, 2);
+
+        // 4. CCITT CRC-16 Little-Endian
+        let mut ccitt_le_frames = Vec::new();
+        for i in 0..4u8 {
+            let mut f = vec![0x12, 0x34, 0x56, i];
+            let crc = compute_crc16_ccitt(&f);
+            f.extend_from_slice(&crc.to_le_bytes());
+            ccitt_le_frames.push(f);
+        }
+        let refs: Vec<&[u8]> = ccitt_le_frames.iter().map(|v| v.as_slice()).collect();
+        let res = detect_trailing_checksum(&refs).unwrap();
+        assert_eq!(res.name, "CRC-16/CCITT (0x1021 LE)");
+        assert_eq!(res.width, 2);
+    }
 }
+
