@@ -5,6 +5,7 @@ pub mod dnp3;
 pub mod isotp;
 pub mod j1939;
 pub mod modbus;
+pub mod obd2;
 pub mod uds;
 
 pub use bacnet::{
@@ -15,7 +16,10 @@ pub use compliance::{ComplianceIssue, ComplianceReport, ViolationSeverity};
 pub use dnp3::{
     dissect_dnp3, dnp3_crc16, verify_dnp3_crc, Dnp3Frame, Dnp3FunctionCode, Dnp3ObjectHeader,
 };
-pub use isotp::{IsoTpError, IsoTpFrameType, IsoTpReassembler};
+pub use isotp::{
+    parse_flow_control, parse_isotp_addressing, FlowControlInfo, FlowStatus, IsoTpAddressing,
+    IsoTpError, IsoTpFrameType, IsoTpReassembler,
+};
 pub use j1939::{
     dissect_j1939, dissect_j1939_payload, parse_j1939_header, J1939Dtc, J1939Header, J1939Message,
     J1939Payload, J1939TransportReassembler, PGN_ADDRESS_CLAIMED, PGN_CCVS1, PGN_COMPONENT_ID,
@@ -25,4 +29,8 @@ pub use modbus::{
     parse_modbus_rtu_frame, parse_modbus_tcp_frame, DiagnosticSubFunction, ModbusExceptionCode,
     ModbusPdu, ModbusRtuAdu, ModbusTcpAdu,
 };
-pub use uds::{dissect_uds, uds_nrc_description, UdsMessage};
+pub use obd2::{
+    dissect_obd2, format_obd2_mode09_text, format_obd2_pid_value, obd2_mode09_name, obd2_pid_name,
+    Obd2Dtc, Obd2Message,
+};
+pub use uds::{dissect_uds, uds_did_name, uds_nrc_description, UdsDtc, UdsMessage};

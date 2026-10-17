@@ -45,16 +45,20 @@ The scanner searches a noisy serial byte buffer for valid Modbus frames:
 
 ## 4. ISO 15765-2 (ISO-TP) Transport Reassembler
 
-Automotive and industrial CAN frames are limited to 8 payload bytes in classic CAN. Large diagnostic messages use ISO 15765-2 transport reassembly:
+Automotive and industrial CAN frames are limited to 8 payload bytes in classic CAN and 64 bytes in CAN-FD. Large diagnostic messages use ISO 15765-2 transport reassembly:
 
 | PCI Frame Type | Nibble | Function | Payload Capacity |
 | :--- | :--- | :--- | :--- |
-| **Single Frame (SF)** | `0x0_` | Unfragmented message | 1 to 7 bytes |
-| **First Frame (FF)** | `0x1_` | Initiates segmented transfer; announces total length | 6 bytes (first chunk) |
-| **Consecutive Frame (CF)** | `0x2_` | Transfers payload chunks with sequence counter (`0..15`) | Up to 7 bytes per frame |
-| **Flow Control (FC)** | `0x3_` | Flow status, block size, and separation time (STmin) | Protocol control |
+| **Single Frame (SF)** | `0x0_` | Unfragmented message (Classical CAN: 1 to 7 bytes; CAN-FD: `0x00` escape up to 62 bytes) | 1 to 62 bytes |
+| **First Frame (FF)** | `0x1_` | Initiates segmented transfer; announces 12-bit length (`0x1N`) or CAN-FD 32-bit length (`0x10 0x00`) | Up to $2^{32}-1$ bytes |
+| **Consecutive Frame (CF)** | `0x2_` | Transfers payload chunks with sequence counter (`0..15`) | Up to 63 bytes per frame |
+| **Flow Control (FC)** | `0x3_` | Flow status (`CTS = 0`, `Wait = 1`, `Overflow = 2`), Block Size (`BS`), and Separation Time (`STmin`: ms or µs) | Protocol control |
 
-The `IsoTpReassembler` manages per-CAN-ID assembly sessions, validates sequence continuity, rejects unexpected consecutive frames, and discards stale sessions after configurable inactivity timeouts.
+The `IsoTpReassembler` manages per-CAN-ID assembly sessions across all four standard addressing schemas:
+- **Normal 11-Bit:** Direct arbitration ID mapping (e.g., `0x7E0` request / `0x7E8` response).
+- **Normal Fixed 29-Bit:** Priority (3-bit), Target Address / PS (8-bit), and Source Address / SA (8-bit). Supports Physical addressing (`0x18DA...`) and Functional broadcast (`0x18DB...`).
+- **Extended 11-Bit:** Transmits Target Address (`N_TA`) in payload byte 0.
+- **Mixed 29-Bit:** Transmits Address Extension (`N_AE`) in payload byte 0 with Format `0xCE` (`0x18CE...`).
 
 ---
 
@@ -62,15 +66,43 @@ The `IsoTpReassembler` manages per-CAN-ID assembly sessions, validates sequence 
 
 The UDS dissector parses reassembled ISO-TP payloads into structured diagnostic services:
 
-- **Diagnostic Session Control (`0x10`):** Default, Programming, and Extended Diagnostic sessions with P2/P2* server timing parameters.
-- **Read Data By Identifier (`0x22` / `0x62`):** Extracts 16-bit DIDs (e.g., VIN, software version, sensor readings).
+- **Diagnostic Session Control (`0x10` / `0x50`):** Default, Programming, and Extended Diagnostic sessions with P2/P2* server timing parameters.
+- **ECU Reset (`0x11`):** Hard reset, key-off-on reset, soft reset, and enable rapid power shutdown.
+- **Clear Diagnostic Information (`0x14`):** Purges stored emission and manufacturer fault records.
+- **Read DTC Information (`0x19` / `0x59`):** Extracts 3-byte DTCs (2-byte SAE code + 1-byte Failure Mode Indicator [FMI] / Fault Type Byte [FTB]) and 1-byte status mask (`testFailed`, `pending`, `confirmed`, `warningIndicator`).
+- **Read & Write Data By Identifier (`0x22`, `0x2E`, `0x62`):** Extracts 16-bit DIDs with automatic name lookup across standard automotive DIDs (`0xF180` BootSoftwareIdentification, `0xF186` ActiveDiagnosticSession, `0xF187` SparePartNumber, `0xF189` SoftwareVersion, `0xF190` VIN).
 - **Security Access (`0x27` / `0x67`):** Parses seed request and key send handshakes.
+- **Input / Output Control (`0x2F` / `0x6F`):** Audits actuator overrides, short-term adjustments, and returns control to ECU.
+- **Routine Control (`0x31` / `0x71`):** Monitors startRoutine (`0x01`), stopRoutine (`0x02`), and requestRoutineResults (`0x03`) across 16-bit Routine Identifiers (e.g., `0x0203` Check Memory, `0x0202` Erase Memory).
+- **Firmware Flashing & Data Transfer (`0x34`–`0x37`):** Dissects RequestDownload (`0x34`), RequestUpload (`0x35`), TransferData (`0x36`) with block sequence counter auditing, and RequestTransferExit (`0x37`).
 - **Tester Present (`0x3E` / `0x7E`):** Audits keep-alive signals and suppress-positive-response flags.
 - **Negative Response (`0x7F`):** Identifies rejected Service ID (SID) and maps Negative Response Codes (NRC) such as `ConditionsNotCorrect` (`0x22`), `SecurityAccessDenied` (`0x33`), or `ServiceNotSupportedInActiveSession` (`0x7F`).
 
 ---
 
-## 6. IEEE 1815 (DNP3) Substation Dissector
+## 6. SAE J1979 / ISO 15031-5 (OBD-II) Dissector
+
+The OBD-II engine provides automated decoding of vehicle powertrain diagnostics across Modes $01 through $0A:
+
+- **Mode $01 (Show Current Data):** Translates raw PID bytes into scaled physical units:
+  - `0x0C` Engine RPM: $\frac{A \times 256 + B}{4}\text{ rpm}$
+  - `0x0D` Vehicle Speed: $A\text{ km/h}$
+  - `0x05` Engine Coolant Temperature: $A - 40\text{ }^\circ\text{C}$
+  - `0x0F` Intake Air Temperature: $A - 40\text{ }^\circ\text{C}$
+  - `0x10` MAF Air Flow Rate: $\frac{A \times 256 + B}{100}\text{ g/s}$
+  - `0x04` Calculated Engine Load / `0x11` Throttle Position: $\frac{A}{2.55}\text{ \%}$
+  - `0x1F` Run Time Since Engine Start: $A \times 256 + B\text{ s}$
+  - `0x42` Control Module Voltage: $\frac{A \times 256 + B}{1000}\text{ V}$
+- **Mode $02 (Show Freeze Frame):** Captures snapshot PID records logged when a DTC triggered.
+- **Mode $03 / $07 / $0A (DTC Extraction):** Parses 2-byte trouble codes into standard 5-character SAE J2012 codes (`P0300`, `U0100`, `C0035`, `B0001`):
+  - Prefix determined by bits 7-6 (`00 = P` Powertrain, `01 = C` Chassis, `10 = B` Body, `11 = U` Network).
+  - Code type determined by bits 5-4 (`0` or `2` = SAE Standard, `1` or `3` = Manufacturer Specific).
+- **Mode $04 (Clear Diagnostic Information):** Erases DTCs and freeze frame data.
+- **Mode $09 (Request Vehicle Information):** Decodes ASCII vehicle metadata, including 17-character VIN (`0x02`), Calibration ID / CALID (`0x04`), CVN (`0x06`), and ECU Name (`0x0A`).
+
+---
+
+## 7. IEEE 1815 (DNP3) Substation Dissector
 
 DNP3 is widely deployed across electric utility, water, and oil/gas SCADA networks. The dissector supports:
 
@@ -87,7 +119,7 @@ DNP3 is widely deployed across electric utility, water, and oil/gas SCADA networ
 
 ---
 
-## 7. SAE J1939 Transport Protocol (BAM & CMDT)
+## 8. SAE J1939 Transport Protocol (BAM & CMDT)
 
 Heavy-duty commercial vehicles and machinery transmit parameters exceeding 8 bytes via J1939 Transport Protocol:
 
@@ -103,7 +135,7 @@ Heavy-duty commercial vehicles and machinery transmit parameters exceeding 8 byt
 
 ---
 
-## 8. Modbus Device Identification (FC 0x2B / 0x0E)
+## 9. Modbus Device Identification (FC 0x2B / 0x0E)
 
 Modbus Encapsulated Interface (MEI Type `0x0E`) provides non-intrusive vendor and model interrogation:
 
@@ -116,7 +148,7 @@ Modbus Encapsulated Interface (MEI Type `0x0E`) provides non-intrusive vendor an
 
 ---
 
-## 9. Standards Compliance Auditing
+## 10. Standards Compliance Auditing
 
 Inspired by Zeek ICSNPP, the compliance auditor compares real-time bus traffic against specification constraints:
 
