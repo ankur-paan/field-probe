@@ -1,11 +1,10 @@
 mod dashboard;
 
-use dashboard::render_dashboard;
+use dashboard::{run_interactive_dashboard, DashboardState};
 use fp_autodetect::score_serial_stream;
-use fp_core::{AdapterCapabilities, IndustrialChip, RawFrame, SafetyTier};
+use fp_core::{RawFrame, SafetyTier};
 use fp_dissectors::{ComplianceReport, ModbusPdu, ModbusRtuAdu};
 use fp_hal::{BusInterface, ReplayInterface};
-use fp_inference::InferenceEngine;
 use fp_mcp::{get_tool_definitions, run_stdio_server, McpServerState};
 use fp_server::{run_server, ServerState};
 use std::env;
@@ -72,50 +71,7 @@ fn print_help() {
 fn run_dongles_command() {
     println!("Enumerate Industrial Hardware Interfaces:");
     println!("--------------------------------------------------------------------------");
-    let dongles = vec![
-        AdapterCapabilities {
-            interface_id: "usb-serial-port-0".to_string(),
-            chip_type: IndustrialChip::FtdiFt232,
-            supports_serial: true,
-            supports_can: false,
-            supports_can_fd: false,
-            supports_listen_only: true,
-            supported_baud_rates: vec![9600, 19200, 38400, 57600, 115200],
-            supported_can_bitrates: vec![],
-            usb_vid: Some(0x0403),
-            usb_pid: Some(0x6001),
-            serial_number: Some("FT232R-01".to_string()),
-            description: "FTDI FT232R USB-to-RS485 Dongle".to_string(),
-        },
-        AdapterCapabilities {
-            interface_id: "can0".to_string(),
-            chip_type: IndustrialChip::PeakPcan,
-            supports_serial: false,
-            supports_can: true,
-            supports_can_fd: true,
-            supports_listen_only: true,
-            supported_baud_rates: vec![],
-            supported_can_bitrates: vec![500_000, 250_000, 125_000, 1_000_000],
-            usb_vid: Some(0x0C72),
-            usb_pid: Some(0x000C),
-            serial_number: Some("PCAN-USB-01".to_string()),
-            description: "PEAK PCAN-USB Industrial Adapter".to_string(),
-        },
-        AdapterCapabilities {
-            interface_id: "vbus0".to_string(),
-            chip_type: IndustrialChip::SyntheticReplay,
-            supports_serial: true,
-            supports_can: true,
-            supports_can_fd: true,
-            supports_listen_only: true,
-            supported_baud_rates: vec![9600, 19200, 38400, 115200],
-            supported_can_bitrates: vec![500_000, 250_000],
-            usb_vid: None,
-            usb_pid: None,
-            serial_number: None,
-            description: "Synthetic Bus Replay Device (Virtual)".to_string(),
-        },
-    ];
+    let dongles = fp_hal::enumerate_dongles();
 
     for d in dongles {
         println!(
@@ -187,45 +143,12 @@ async fn run_autodetect_command() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run_dashboard_command() -> Result<(), Box<dyn std::error::Error>> {
-    let mut engine = InferenceEngine::new(500_000, 1000);
-    let mut frame_count = 0u64;
-
-    // Simulate traffic stream into inference engine
-    for step in 0..6 {
-        let t = 1_000_000 + step * 50_000;
-        let val_encoded = 0x41BB999Au32.to_be_bytes();
-        let query = ModbusRtuAdu {
-            slave_id: 1,
-            pdu: ModbusPdu::ReadHoldingRegistersQuery {
-                start_addr: 40001,
-                quantity: 2,
-            },
-            crc16: 0,
-        };
-        let resp = ModbusRtuAdu {
-            slave_id: 1,
-            pdu: ModbusPdu::ReadResponse {
-                function_code: 0x03,
-                byte_count: 4,
-                data: val_encoded.to_vec(),
-            },
-            crc16: 0,
-        };
-        engine.ingest_modbus_frame(&query, t);
-        engine.ingest_modbus_frame(&resp, t + 12_000);
-        frame_count += 2;
-
-        render_dashboard(
-            &engine,
-            SafetyTier::PassiveListenOnly,
-            "Modbus RTU",
-            9600,
-            frame_count,
-        )?;
-        sleep(Duration::from_millis(100)).await;
-    }
-
-    println!("\nDashboard demonstration completed successfully.");
+    let state = DashboardState::new(
+        SafetyTier::PassiveListenOnly,
+        "Modbus / CAN",
+        500_000,
+    );
+    run_interactive_dashboard(state)?;
     Ok(())
 }
 

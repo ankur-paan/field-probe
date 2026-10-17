@@ -159,6 +159,50 @@ impl CanFrame {
             is_error: false,
         }
     }
+
+    pub fn new_standard_rtr(id: u16, dlc: u8) -> Self {
+        Self {
+            id: CanId::Standard(id & 0x7FF),
+            dlc,
+            data: Bytes::new(),
+            is_fd: false,
+            is_rtr: true,
+            is_error: false,
+        }
+    }
+
+    pub fn new_extended_rtr(id: u32, dlc: u8) -> Self {
+        Self {
+            id: CanId::Extended(id & 0x1FFFFFFF),
+            dlc,
+            data: Bytes::new(),
+            is_fd: false,
+            is_rtr: true,
+            is_error: false,
+        }
+    }
+
+    pub fn new_standard_fd(id: u16, data: &[u8]) -> Self {
+        Self {
+            id: CanId::Standard(id & 0x7FF),
+            dlc: data.len() as u8,
+            data: Bytes::copy_from_slice(data),
+            is_fd: true,
+            is_rtr: false,
+            is_error: false,
+        }
+    }
+
+    pub fn new_extended_fd(id: u32, data: &[u8]) -> Self {
+        Self {
+            id: CanId::Extended(id & 0x1FFFFFFF),
+            dlc: data.len() as u8,
+            data: Bytes::copy_from_slice(data),
+            is_fd: true,
+            is_rtr: false,
+            is_error: false,
+        }
+    }
 }
 
 /// Frame targeted for bus transmission.

@@ -1,4 +1,4 @@
-use fp_core::{AdapterCapabilities, BusProtocol, IndustrialChip, SafetyTier};
+use fp_core::{AdapterCapabilities, BusProtocol, SafetyTier};
 use fp_dissectors::ComplianceReport;
 use fp_inference::InferenceEngine;
 use serde::{Deserialize, Serialize};
@@ -36,28 +36,13 @@ impl Default for ServerState {
 
 impl ServerState {
     pub fn new() -> Self {
-        let dummy_adapter = AdapterCapabilities {
-            interface_id: "usb-serial-port-0".to_string(),
-            chip_type: IndustrialChip::FtdiFt232,
-            supports_serial: true,
-            supports_can: false,
-            supports_can_fd: false,
-            supports_listen_only: true,
-            supported_baud_rates: vec![9600, 19200, 38400, 57600, 115200],
-            supported_can_bitrates: vec![],
-            usb_vid: Some(0x0403),
-            usb_pid: Some(0x6001),
-            serial_number: Some("FT232R-01".to_string()),
-            description: "FTDI FT232R USB-to-RS485 Dongle".to_string(),
-        };
-
         Self {
             inference_engine: Arc::new(RwLock::new(InferenceEngine::new(500_000, 1000))),
             compliance_report: Arc::new(RwLock::new(ComplianceReport::new())),
             safety_tier: SafetyTier::PassiveListenOnly,
             detected_protocol: BusProtocol::ModbusRtu,
             detected_baud_rate: 9600,
-            dongles: vec![dummy_adapter],
+            dongles: fp_hal::enumerate_dongles(),
             start_time: Instant::now(),
         }
     }

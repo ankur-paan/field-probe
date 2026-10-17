@@ -45,7 +45,7 @@ async fn test_fp_server_health_and_dongles_endpoints() {
     let json_start = response_str.find("\r\n\r\n").unwrap() + 4;
     let json_val: Value = serde_json::from_str(&response_str[json_start..]).unwrap();
     let dongles = json_val["dongles"].as_array().unwrap();
-    assert_eq!(dongles.len(), 1);
+    assert!(!dongles.is_empty());
     assert_eq!(dongles[0]["supports_listen_only"], true);
     assert_eq!(dongles[0]["zero_tx_enforced"], true);
 

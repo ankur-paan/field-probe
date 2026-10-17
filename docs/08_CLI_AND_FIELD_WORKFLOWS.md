@@ -44,3 +44,26 @@ Follow these steps when diagnosing an unknown cabinet:
 
 5. **Execute Compliance Audit:**  
    Review physical link warnings (e.g., termination resistor missing or wire polarity swapped).
+
+---
+
+## 4. Interactive Terminal Dashboard (TUI)
+
+Executing `fp dashboard` launches the full-screen terminal user interface powered by `ratatui` and `crossterm`:
+
+- **System Header:** Shows live version, safety tier status, Zero-TX verification, bus lock state, discovered register counts, active CAN nodes, and periodic broadcast loops.
+- **Tab 1 — Register Catalog:** Real-time table of discovered Modbus holding registers, raw hex, polling frequency (Hz), jitter (ms), inferred data representation, and statistical confidence score.
+- **Tab 2 — CAN Sniffer:** CAN bus monitor with bitwise XOR mutation tracking (`cansniffer` algorithm), DLC, payload, and periodic broadcast frequency detection.
+- **Tab 3 — Compliance Audit:** Bus health score meter, total analyzed frames, CRC errors, protocol violations, and detailed diagnostic findings with physical wiring hints.
+- **Tab 4 — Differential Capture:** Physical event correlation engine. Press `[d]` to snapshot baseline; toggle a switch or sensor on the field bus, then press `[d]` to stop and isolate exact bit mutations.
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|---|---|
+| `[Tab]` / `[Right]` | Cycle forward to next view tab |
+| `[BackTab]` / `[Left]` | Cycle backward to previous view tab |
+| `[1]` .. `[4]` | Jump directly to View 1, 2, 3, or 4 |
+| `[d]` / `[D]` | Toggle Physical Event Differential Capture |
+| `[c]` / `[C]` | Reset / Clear Baseline Diff History |
+| `[q]` / `[Esc]` | Exit Dashboard and restore terminal |
