@@ -560,6 +560,16 @@ pub fn parse_modbus_tcp_frame(raw: &[u8]) -> Option<ModbusTcpAdu> {
     })
 }
 
+impl ModbusPdu {
+    pub fn exception_name(&self) -> Option<&'static str> {
+        if let ModbusPdu::Exception { exception_code, .. } = self {
+            Some(exception_code.name())
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,16 +732,6 @@ mod tests {
         #[test]
         fn fuzz_modbus_tcp_never_panics(data in proptest::collection::vec(any::<u8>(), 0..512)) {
             let _ = parse_modbus_tcp_frame(&data);
-        }
-    }
-}
-
-impl ModbusPdu {
-    pub fn exception_name(&self) -> Option<&'static str> {
-        if let ModbusPdu::Exception { exception_code, .. } = self {
-            Some(exception_code.name())
-        } else {
-            None
         }
     }
 }

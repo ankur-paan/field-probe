@@ -1,17 +1,18 @@
 use serde::{Deserialize, Serialize};
 
-/// Standard DNP3 (IEEE 1815) CRC-16 calculation (polynomial 0xA646 reversed 0xD178, inverted)
+/// Standard DNP3 (IEEE 1815) CRC-16 calculation (polynomial 0x3D65 reflected to 0xA6BC, inverted result)
 pub fn dnp3_crc16(data: &[u8]) -> u16 {
     let mut crc = 0x0000u16;
-    for &b in data {
-        for bit in 0..8 {
-            let bit_val = ((b >> bit) & 1) as u16;
-            let carry = (crc & 1) ^ bit_val;
-            crc >>= 1;
-            if carry != 0 {
-                crc ^= 0xA646;
+    for &byte in data {
+        let mut temp = (byte as u16) ^ (crc & 0xFF);
+        for _ in 0..8 {
+            if (temp & 0x01) != 0 {
+                temp = (temp >> 1) ^ 0xA6BC;
+            } else {
+                temp >>= 1;
             }
         }
+        crc = (crc >> 8) ^ temp;
     }
     !crc
 }

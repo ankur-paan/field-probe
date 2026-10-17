@@ -71,25 +71,39 @@ pub fn export_pcapng(events: &[RawBusEvent]) -> Vec<u8> {
     buf.extend_from_slice(&0xFFFFFFFFFFFFFFFFu64.to_le_bytes()); // Section length undefined
     buf.extend_from_slice(&shb_len.to_le_bytes());
 
-    // 2. Interface Description Block (IDB)
+    // 2. Interface Description Block 0 (SocketCAN)
     // Type = 0x00000001, Length = 20, LinkType = 227 (LINKTYPE_CAN_SOCKETCAN), SnapLen = 65535
     let idb_len: u32 = 20;
-    let link_type: u16 = 227; // LINKTYPE_CAN_SOCKETCAN
     buf.extend_from_slice(&0x00000001u32.to_le_bytes());
     buf.extend_from_slice(&idb_len.to_le_bytes());
-    buf.extend_from_slice(&link_type.to_le_bytes());
+    buf.extend_from_slice(&227u16.to_le_bytes()); // LINKTYPE_CAN_SOCKETCAN
+    buf.extend_from_slice(&0u16.to_le_bytes()); // Reserved
+    buf.extend_from_slice(&65535u32.to_le_bytes()); // SnapLen
+    buf.extend_from_slice(&idb_len.to_le_bytes());
+
+    // Interface Description Block 1 (Serial / RTAC / User0)
+    // Type = 0x00000001, Length = 20, LinkType = 250 (LINKTYPE_RTAC_SERIAL), SnapLen = 65535
+    buf.extend_from_slice(&0x00000001u32.to_le_bytes());
+    buf.extend_from_slice(&idb_len.to_le_bytes());
+    buf.extend_from_slice(&250u16.to_le_bytes()); // LINKTYPE_RTAC_SERIAL
     buf.extend_from_slice(&0u16.to_le_bytes()); // Reserved
     buf.extend_from_slice(&65535u32.to_le_bytes()); // SnapLen
     buf.extend_from_slice(&idb_len.to_le_bytes());
 
     // 3. Enhanced Packet Blocks (EPB)
     for ev in events {
-        let (raw_bytes, can_id_u32) = match &ev.payload {
+        let (raw_bytes, interface_id) = match &ev.payload {
             RawFrame::Can(c) => {
-                let id_val = match c.id {
+                let mut id_val = match c.id {
                     CanId::Standard(s) => s as u32,
-                    CanId::Extended(e) => e | 0x80000000,
+                    CanId::Extended(e) => (e & 0x1FFFFFFF) | 0x80000000,
                 };
+                if c.is_rtr {
+                    id_val |= 0x40000000;
+                }
+                if c.is_error {
+                    id_val |= 0x20000000;
+                }
                 let mut packet = Vec::with_capacity(16);
                 packet.extend_from_slice(&id_val.to_be_bytes());
                 packet.push(c.dlc);
@@ -97,9 +111,9 @@ pub fn export_pcapng(events: &[RawBusEvent]) -> Vec<u8> {
                 packet.push(0); // reserved
                 packet.push(0); // reserved
                 packet.extend_from_slice(&c.data);
-                (packet, id_val)
+                (packet, 0u32)
             }
-            RawFrame::Serial(s) => (s.data.to_vec(), 0),
+            RawFrame::Serial(s) => (s.data.to_vec(), 1u32),
         };
 
         let cap_len = raw_bytes.len() as u32;
@@ -108,7 +122,7 @@ pub fn export_pcapng(events: &[RawBusEvent]) -> Vec<u8> {
 
         buf.extend_from_slice(&0x00000006u32.to_le_bytes()); // Block Type EPB
         buf.extend_from_slice(&epb_len.to_le_bytes());
-        buf.extend_from_slice(&0u32.to_le_bytes()); // Interface ID = 0
+        buf.extend_from_slice(&interface_id.to_le_bytes()); // Interface ID: 0 for CAN, 1 for Serial
 
         // Timestamp in microseconds
         let ts_high = (ev.timestamp_us >> 32) as u32;
@@ -123,7 +137,6 @@ pub fn export_pcapng(events: &[RawBusEvent]) -> Vec<u8> {
         buf.resize(buf.len() + pad_len as usize, 0);
 
         buf.extend_from_slice(&epb_len.to_le_bytes());
-        let _ = can_id_u32;
     }
 
     buf
@@ -233,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_export_pcapng_binary() {
-        let ev = RawBusEvent {
+        let ev_can = RawBusEvent {
             interface_id: "can0".into(),
             timestamp_us: 100_000,
             link_params: LinkParams::Serial(SerialParams::default()),
@@ -242,10 +255,31 @@ mod tests {
             error_flags: Default::default(),
         };
 
-        let pcap = export_pcapng(&[ev]);
-        assert!(pcap.len() >= 64);
-        // Verify SHB magic 0x0A0D0D0A
+        let ev_serial = RawBusEvent {
+            interface_id: "ttyUSB0".into(),
+            timestamp_us: 105_000,
+            link_params: LinkParams::Serial(SerialParams::default()),
+            payload: RawFrame::Serial(fp_core::TimestampedChunk::new(
+                vec![0x01, 0x03, 0x00, 0x64, 0x00, 0x02],
+                Some(105_000),
+            )),
+            direction: Direction::Rx,
+            error_flags: Default::default(),
+        };
+
+        let pcap = export_pcapng(&[ev_can, ev_serial]);
+        // Verify SHB magic 0x0A0D0D0A (bytes 0..4)
         assert_eq!(&pcap[0..4], &[0x0A, 0x0D, 0x0D, 0x0A]);
+        // Two IDBs of 20 bytes each (SHB is 28 bytes):
+        // IDB 0 starts at offset 28
+        assert_eq!(&pcap[28..32], &[0x01, 0x00, 0x00, 0x00]); // Block type IDB
+        assert_eq!(&pcap[36..38], &227u16.to_le_bytes()); // LinkType 227 (CAN)
+        // IDB 1 starts at offset 28 + 20 = 48
+        assert_eq!(&pcap[48..52], &[0x01, 0x00, 0x00, 0x00]); // Block type IDB
+        assert_eq!(&pcap[56..58], &250u16.to_le_bytes()); // LinkType 250 (RTAC Serial)
+        // EPB 0 starts at offset 68
+        assert_eq!(&pcap[68..72], &[0x06, 0x00, 0x00, 0x00]); // Block type EPB
+        assert_eq!(&pcap[76..80], &0u32.to_le_bytes()); // Interface ID 0 for CAN
     }
 
     #[test]

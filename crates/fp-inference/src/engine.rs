@@ -59,7 +59,7 @@ impl InferenceEngine {
         adu: &ModbusRtuAdu,
         timestamp_us: u64,
     ) -> Option<MatchedTransaction> {
-        let matched = self.transaction_matcher.ingest_modbus_frame(adu, timestamp_us)?;
+        let mut matched = self.transaction_matcher.ingest_modbus_frame(adu, timestamp_us)?;
 
         // Update Welford timing tracker per (slave_id, start_address)
         let timing_tracker = self
@@ -86,7 +86,17 @@ impl InferenceEngine {
                 let decrypted = auto_decrypt_payload(&self.keyring, &node_str, data)
                     .or_else(|| auto_decrypt_payload(&self.keyring, "global", data));
 
-                if decrypted.is_none() {
+                if let Some(decrypted_bytes) = decrypted {
+                    let mut reg_vals = Vec::new();
+                    for (idx, chunk) in decrypted_bytes.chunks_exact(2).enumerate() {
+                        let addr = (matched.start_address as usize + idx) as u16;
+                        let val = u16::from_be_bytes([chunk[0], chunk[1]]);
+                        reg_vals.push((addr, val));
+                    }
+                    if !reg_vals.is_empty() {
+                        matched.register_values = reg_vals;
+                    }
+                } else {
                     is_encrypted_block = true;
                     self.catalog.insert_or_update(InferredRegisterEntry {
                         node_or_slave: node_str.clone(),
@@ -351,5 +361,64 @@ mod tests {
             .get(&fp_core::CanId::Standard(0x123))
             .expect("Slot recorded");
         assert_eq!(slot.frame_count, 1);
+    }
+
+    #[test]
+    fn test_inference_engine_modbus_decryption_unpacks_registers() {
+        let mut engine = InferenceEngine::new(500_000, 1000);
+
+        // Plaintext payload starting with IEEE 754 Float32 ABCD (123.45): 0x42F6, 0xE666
+        let mut plaintext: Vec<u8> = vec![0x42, 0xF6, 0xE6, 0x66];
+        for i in 4..32 {
+            plaintext.push(((i * 37 + 11) % 256) as u8);
+        }
+
+        // 32 distinct pseudorandom bytes (Shannon entropy = 5.0 bits/byte >= max_possible * 0.92)
+        let ciphertext: Vec<u8> = (0..32).map(|i| ((i * 73 + 19) % 256) as u8).collect();
+
+        // Exact XOR key to decrypt ciphertext -> plaintext
+        let mut xor_key = Vec::with_capacity(32);
+        for i in 0..32 {
+            xor_key.push(plaintext[i] ^ ciphertext[i]);
+        }
+
+        // Register key for Slave_3
+        engine.keyring.insert_key(ManagedKey {
+            key_id: "slave3-xor".to_string(),
+            key_type: KeyType::XorMask,
+            target_scope: "Slave_3".to_string(),
+            secret_bytes: xor_key,
+        });
+
+        // Query
+        let query = ModbusRtuAdu {
+            slave_id: 3,
+            pdu: ModbusPdu::ReadHoldingRegistersQuery {
+                start_addr: 100,
+                quantity: 16,
+            },
+            crc16: 0,
+        };
+        engine.ingest_modbus_frame(&query, 2_000_000);
+
+        // Response with high entropy ciphertext
+        let resp = ModbusRtuAdu {
+            slave_id: 3,
+            pdu: ModbusPdu::ReadResponse {
+                function_code: 0x03,
+                byte_count: 32,
+                data: ciphertext,
+            },
+            crc16: 0,
+        };
+        let matched = engine.ingest_modbus_frame(&resp, 2_010_000).expect("Matched transaction");
+
+        // Regression test for Bug 1.2: Register values MUST reflect decrypted plaintext, not raw ciphertext
+        assert_eq!(matched.register_values[0], (100, 0x42F6));
+        assert_eq!(matched.register_values[1], (101, 0xE666));
+
+        // Catalog entry should be inferred as Float32 rather than encrypted block
+        let entry = engine.catalog.entries.get("Slave_3:100").expect("Catalog entry");
+        assert!(entry.plausible_type.contains("Float32"));
     }
 }

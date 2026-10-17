@@ -50,9 +50,12 @@ impl Default for McpServerState {
 
 impl McpServerState {
     pub fn new() -> Self {
+        let keyring = KeyRing::new();
+        let mut inference_engine = InferenceEngine::new(500_000, 1000);
+        inference_engine.keyring = keyring.clone();
         Self {
-            inference_engine: InferenceEngine::new(500_000, 1000),
-            keyring: Arc::new(KeyRing::new()),
+            inference_engine,
+            keyring: Arc::new(keyring),
             compliance_report: ComplianceReport::new(),
             current_safety_tier: SafetyTier::PassiveListenOnly, // Tier-0 Zero-TX invariant
             detected_protocol: BusProtocol::ModbusRtu,
@@ -245,7 +248,17 @@ impl McpServerState {
             scope,
         );
 
-        if let Some(sig) = signature {
+        if self.keyring.has_operator_keys() {
+            let sig = signature.ok_or_else(|| {
+                McpError::safety_violation(
+                    "Active probing BLOCKED: KeyRing contains configured operator secrets. An explicit cryptographic permit signature is REQUIRED.",
+                )
+            })?;
+            permit = permit.with_signature(sig);
+            if !self.keyring.verify_permit(&permit) {
+                return Err(McpError::safety_violation("Supplied safety permit signature is INVALID"));
+            }
+        } else if let Some(sig) = signature {
             permit = permit.with_signature(sig);
             if !self.keyring.verify_permit(&permit) {
                 return Err(McpError::safety_violation("Supplied safety permit signature is INVALID"));
@@ -330,7 +343,7 @@ mod tests {
     fn test_mcp_list_dongles() {
         let mut state = McpServerState::new();
         let res = state.execute_tool("list_dongles", &json!({})).expect("Tool executed");
-        assert!(res["dongles"].as_array().unwrap().len() >= 1);
+        assert!(!res["dongles"].as_array().unwrap().is_empty());
         assert_eq!(res["dongles"][0]["zero_tx_enforced"], true);
     }
 
@@ -352,5 +365,49 @@ mod tests {
         let res = state.execute_tool("load_security_key", &args).expect("Tool executed");
         assert_eq!(res["key_len_bytes"], 16);
         assert!(state.keyring.get_symmetric_key("secoc-key-1").is_some());
+        // Regression test for Bug 1.1: Shared KeyRing reaches InferenceEngine
+        assert!(state.inference_engine.keyring.get_symmetric_key("secoc-key-1").is_some());
+    }
+
+    #[test]
+    fn test_mcp_active_probe_signature_enforcement() {
+        use fp_core::SafetyTier;
+        let mut state = McpServerState::new();
+        // Elevate safety tier to Tier-1
+        state.current_safety_tier = SafetyTier::ReadOnlyProbe;
+
+        // Load an OperatorSecret
+        let key_args = json!({
+            "key_id": "op-secret",
+            "key_type": "OperatorSecret",
+            "target_scope": "operator",
+            "hex_bytes": "01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10 11 12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F 20"
+        });
+        state.execute_tool("load_security_key", &key_args).unwrap();
+
+        // Attempt probe without signature -> MUST FAIL
+        let probe_args = json!({
+            "permit_token": "valid-token-123"
+        });
+        let err = state.execute_tool("request_active_probe", &probe_args).unwrap_err();
+        assert_eq!(err.code, 4003);
+        assert!(err.message.contains("permit signature is REQUIRED"));
+
+        // Sign the permit properly and retry -> MUST SUCCEED
+        let mut permit = fp_core::SafetyPermit::new(
+            "valid-token-123",
+            SafetyTier::ReadOnlyProbe,
+            "mcp-operator",
+            chrono::Utc::now() + chrono::Duration::minutes(10),
+            None,
+        );
+        assert!(state.keyring.sign_permit("op-secret", &mut permit));
+
+        let signed_args = json!({
+            "permit_token": "valid-token-123",
+            "signature": permit.signature.unwrap()
+        });
+        let res = state.execute_tool("request_active_probe", &signed_args).expect("Signed probe succeeds");
+        assert_eq!(res["permit_id"], "valid-token-123");
     }
 }

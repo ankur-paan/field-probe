@@ -104,6 +104,14 @@ impl KeyRing {
         }
         false
     }
+
+    /// Check whether the keyring contains any OperatorSecret keys or operator-scoped keys
+    pub fn has_operator_keys(&self) -> bool {
+        let guard = self.keys.read().unwrap();
+        guard.values().any(|k| {
+            k.key_type == KeyType::OperatorSecret || k.target_scope == "operator"
+        })
+    }
 }
 
 #[cfg(test)]
