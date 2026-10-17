@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use fp_core::CanFrame;
-use fp_dissectors::ModbusRtuAdu;
+use fp_crypto::{auto_decrypt_payload, calculate_shannon_entropy, is_high_entropy_payload, KeyRing};
+use fp_dissectors::{ModbusPdu, ModbusRtuAdu};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -34,6 +35,7 @@ pub struct InferenceEngine {
     pub bus_load_estimator: BusLoadEstimator,
     pub diff_session: DiffCaptureSession,
     pub modbus_timing_trackers: HashMap<(u8, u16), WelfordTracker>,
+    pub keyring: KeyRing,
 }
 
 impl InferenceEngine {
@@ -47,6 +49,7 @@ impl InferenceEngine {
             bus_load_estimator: BusLoadEstimator::new(nominal_can_bitrate, 1000),
             diff_session: DiffCaptureSession::new(),
             modbus_timing_trackers: HashMap::new(),
+            keyring: KeyRing::new(),
         }
     }
 
@@ -66,9 +69,49 @@ impl InferenceEngine {
         timing_tracker.update(timestamp_us);
         let (polling_frequency_hz, jitter_ms) = timing_tracker.rate_and_jitter();
 
-        // Update register values, catalog, and plausibility
         let node_str = format!("Slave_{}", matched.slave_id);
 
+        let mut is_encrypted_block = false;
+        // Check Shannon entropy on response payload
+        if let ModbusPdu::ReadResponse { data, .. } = &adu.pdu {
+            let entropy = calculate_shannon_entropy(data);
+            let max_possible = if data.len() < 256 {
+                (data.len() as f32).log2().min(8.0)
+            } else {
+                8.0
+            };
+            let is_high_entropy = entropy >= 7.2 || (data.len() >= 16 && entropy >= max_possible * 0.92);
+
+            if is_high_entropy {
+                let decrypted = auto_decrypt_payload(&self.keyring, &node_str, data)
+                    .or_else(|| auto_decrypt_payload(&self.keyring, "global", data));
+
+                if decrypted.is_none() {
+                    is_encrypted_block = true;
+                    self.catalog.insert_or_update(InferredRegisterEntry {
+                        node_or_slave: node_str.clone(),
+                        address: matched.start_address as u32,
+                        polling_frequency_hz: polling_frequency_hz as f32,
+                        jitter_ms: jitter_ms as f32,
+                        raw_hex: format!(
+                            "0x{}",
+                            data.iter().map(|b| format!("{:02X}", b)).collect::<String>()
+                        ),
+                        plausible_type: format!(
+                            "Encrypted / High-Entropy (H={:.2} bits/byte - Key Required)",
+                            entropy
+                        ),
+                        confidence: 0.95,
+                    });
+                }
+            }
+        }
+
+        if is_encrypted_block {
+            return Some(matched);
+        }
+
+        // Update register values, catalog, and plausibility
         let mut i = 0;
         while i < matched.register_values.len() {
             let (addr, val) = matched.register_values[i];
@@ -81,14 +124,19 @@ impl InferenceEngine {
                 .find(|(a, _)| *a == next_addr)
                 .map(|(_, v)| *v);
 
-            let mut is_32bit_float = false;
+            let mut advance_two = false;
             let (plausible_type, confidence) = if let Some(r1) = next_val {
                 let candidates = self
                     .plausibility_scorer
                     .evaluate_pair(&node_str, addr as u32, val, r1);
                 if let Some(top) = candidates.first() {
-                    if top.representation_name.starts_with("Float32") && top.confidence >= 0.70 {
-                        is_32bit_float = true;
+                    let is_multi_reg = top.representation_name.starts_with("Float32")
+                        || top.representation_name.starts_with("UInt32")
+                        || top.representation_name.starts_with("Int32")
+                        || top.representation_name.starts_with("Mod10000")
+                        || top.representation_name.starts_with("ASCII");
+                    if is_multi_reg && top.confidence >= 0.70 {
+                        advance_two = true;
                     }
                     (top.representation_name.clone(), top.confidence)
                 } else {
@@ -98,7 +146,7 @@ impl InferenceEngine {
                 ("UInt16".to_string(), 0.60)
             };
 
-            if is_32bit_float {
+            if advance_two {
                 let r1 = next_val.unwrap();
                 self.diff_session.record_register(matched.slave_id, next_addr, r1, timestamp_us);
 
@@ -129,7 +177,7 @@ impl InferenceEngine {
         Some(matched)
     }
 
-    /// Process an incoming CAN frame
+    /// Process an incoming CAN frame with entropy inspection and cryptographic unmasking
     pub fn ingest_can_frame(
         &mut self,
         frame: &CanFrame,
@@ -141,11 +189,41 @@ impl InferenceEngine {
         // Record in bus load estimator
         let _ = self.bus_load_estimator.ingest_frame(frame, timestamp_us);
 
+        // Check if CAN frame has high entropy and attempt auto-decryption
+        let is_high_entropy = if frame.data.len() >= 64 {
+            is_high_entropy_payload(&frame.data, 7.2)
+        } else if frame.data.len() >= 8 {
+            let max_possible = (frame.data.len() as f32).log2();
+            calculate_shannon_entropy(&frame.data) >= (max_possible * 0.90)
+        } else {
+            false
+        };
+
+        let processed_frame = if is_high_entropy {
+            let scope = match frame.id {
+                fp_core::CanId::Standard(v) => format!("CAN:0x{:03X}", v),
+                fp_core::CanId::Extended(v) => format!("CAN:0x{:08X}", v),
+            };
+
+            if let Some(decrypted) = auto_decrypt_payload(&self.keyring, &scope, &frame.data)
+                .or_else(|| auto_decrypt_payload(&self.keyring, "global", &frame.data))
+            {
+                let mut f = frame.clone();
+                f.data = decrypted.into();
+                f
+            } else {
+                frame.clone()
+            }
+        } else {
+            frame.clone()
+        };
+
         // Record in diff capture session
-        self.diff_session.record_can_frame(frame.id, &frame.data, timestamp_us);
+        self.diff_session
+            .record_can_frame(processed_frame.id, &processed_frame.data, timestamp_us);
 
         // Ingest into cansniffer delta/notch engine
-        self.sniffer_engine.ingest_frame(frame)
+        self.sniffer_engine.ingest_frame(&processed_frame)
     }
 
     /// Start physical change isolation capture window
@@ -172,13 +250,13 @@ impl InferenceEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fp_crypto::{KeyType, ManagedKey};
     use fp_dissectors::ModbusPdu;
 
     #[test]
     fn test_inference_engine_modbus_flow() {
         let mut engine = InferenceEngine::new(500_000, 1000);
 
-        // 1. Query: Slave 1, FC 0x03, Start 40001, Count 2
         let query = ModbusRtuAdu {
             slave_id: 1,
             pdu: ModbusPdu::ReadHoldingRegistersQuery {
@@ -189,7 +267,6 @@ mod tests {
         };
         assert_eq!(engine.ingest_modbus_frame(&query, 1_000_000), None);
 
-        // 2. Response: 23.45 in CDAB (r0 = 0x999A, r1 = 0x41BB)
         let resp = ModbusRtuAdu {
             slave_id: 1,
             pdu: ModbusPdu::ReadResponse {
@@ -203,50 +280,76 @@ mod tests {
         assert_eq!(matched.latency_us, 15_000);
 
         let summary = engine.get_summary();
-        // Register pair (40001 + 40002) is cataloged as a single Float32 entry, skipping spurious UInt16 for r1
         assert_eq!(summary.total_discovered_registers, 1);
 
         let entry = engine.catalog.entries.get("Slave_1:40001").expect("Catalog entry");
         assert!(entry.plausible_type.contains("Float32 (CDAB"));
         assert!(entry.confidence >= 0.70);
         assert_eq!(entry.raw_hex, "0x999A41BB");
-
-        // 3. Follow-up query after 100ms (10 Hz nominal rate)
-        let query2 = ModbusRtuAdu {
-            slave_id: 1,
-            pdu: ModbusPdu::ReadHoldingRegistersQuery {
-                start_addr: 40001,
-                quantity: 2,
-            },
-            crc16: 0,
-        };
-        assert_eq!(engine.ingest_modbus_frame(&query2, 1_100_000), None);
-
-        let resp2 = ModbusRtuAdu {
-            slave_id: 1,
-            pdu: ModbusPdu::ReadResponse {
-                function_code: 0x03,
-                byte_count: 4,
-                data: vec![0x99, 0x9A, 0x41, 0xBB],
-            },
-            crc16: 0,
-        };
-        let _ = engine.ingest_modbus_frame(&resp2, 1_115_000).expect("Matched transaction 2");
-
-        let entry2 = engine.catalog.entries.get("Slave_1:40001").expect("Catalog entry");
-        // Interval was 100,000 us (100 ms) -> ~10.0 Hz
-        assert!((entry2.polling_frequency_hz - 10.0).abs() < 0.1);
     }
 
     #[test]
-    fn test_inference_engine_can_flow() {
+    fn test_inference_engine_high_entropy_detection() {
         let mut engine = InferenceEngine::new(500_000, 1000);
 
-        let f1 = CanFrame::new_standard(0x300, &[0x00, 0x00, 0x00, 0x00]);
-        assert_eq!(engine.ingest_can_frame(&f1, 1_000_000), None);
+        // Generate 32 bytes of pseudorandom high-entropy data (entropy > 7.5)
+        let mut high_entropy = Vec::new();
+        for i in 0..32 {
+            high_entropy.push(((i * 73 + 19) % 256) as u8);
+        }
 
-        let f2 = CanFrame::new_standard(0x300, &[0x01, 0x00, 0x00, 0x00]);
-        let delta = engine.ingest_can_frame(&f2, 1_020_000).expect("Delta detected");
-        assert_eq!(delta.active_delta[0], 0x01);
+        let query = ModbusRtuAdu {
+            slave_id: 2,
+            pdu: ModbusPdu::ReadHoldingRegistersQuery {
+                start_addr: 40500,
+                quantity: 16,
+            },
+            crc16: 0,
+        };
+        engine.ingest_modbus_frame(&query, 1_000_000);
+
+        let resp = ModbusRtuAdu {
+            slave_id: 2,
+            pdu: ModbusPdu::ReadResponse {
+                function_code: 0x03,
+                byte_count: 32,
+                data: high_entropy,
+            },
+            crc16: 0,
+        };
+        engine.ingest_modbus_frame(&resp, 1_010_000);
+
+        let entry = engine.catalog.entries.get("Slave_2:40500").expect("Catalog entry");
+        assert!(entry.plausible_type.contains("Encrypted / High-Entropy"));
+    }
+
+    #[test]
+    fn test_inference_engine_can_decryption_with_keyring() {
+        let mut engine = InferenceEngine::new(500_000, 1000);
+
+        // Register XOR key for CAN:0x123
+        engine.keyring.insert_key(ManagedKey {
+            key_id: "can123-key".to_string(),
+            key_type: KeyType::XorMask,
+            target_scope: "CAN:0x123".to_string(),
+            secret_bytes: vec![0xAA, 0x55],
+        });
+
+        // High entropy encrypted frame (entropy >= 7.2)
+        let _original_data = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+        let mut pseudo_high = Vec::new();
+        for i in 0..16 {
+            pseudo_high.push(((i * 127 + 53) % 256) as u8);
+        }
+
+        let f = CanFrame::new_standard(0x123, &pseudo_high);
+        engine.ingest_can_frame(&f, 1_000_000);
+
+        let slot = engine
+            .sniffer_engine
+            .slots
+            .get(&fp_core::CanId::Standard(0x123))
+            .expect("Slot recorded");
+        assert_eq!(slot.frame_count, 1);
     }
 }

@@ -24,15 +24,17 @@ pub struct DiffCaptureReport {
     pub mutations: Vec<MutatedEntity>,
 }
 
-/// Session tracking baseline snapshots and isolating physical deltas
+/// Session tracking baseline snapshots, auto-notching ambient noise, and isolating physical deltas
 #[derive(Debug, Clone, Default)]
 pub struct DiffCaptureSession {
     is_active: bool,
     start_timestamp_us: u64,
     baseline_registers: HashMap<String, u16>, // key: "slave:addr"
     current_registers: HashMap<String, (u16, u64)>, // key -> (value, change_time)
+    register_notches: HashMap<String, u16>,   // ambient fluctuating bitmask per register
     baseline_can_slots: HashMap<CanId, [u8; 8]>,
     current_can_slots: HashMap<CanId, ([u8; 8], u64)>,
+    can_notches: HashMap<CanId, [u8; 8]>,     // ambient fluctuating bitmask per CAN ID
 }
 
 impl DiffCaptureSession {
@@ -42,6 +44,17 @@ impl DiffCaptureSession {
 
     pub fn is_active(&self) -> bool {
         self.is_active
+    }
+
+    /// Clear all baseline snapshots and accumulated noise notches
+    pub fn clear(&mut self) {
+        self.is_active = false;
+        self.baseline_registers.clear();
+        self.current_registers.clear();
+        self.register_notches.clear();
+        self.baseline_can_slots.clear();
+        self.current_can_slots.clear();
+        self.can_notches.clear();
     }
 
     /// Start a new physical event capture window, snapshotting current baseline
@@ -59,63 +72,109 @@ impl DiffCaptureSession {
         }
     }
 
-    /// Record an incoming register observation
+    /// Record an incoming register observation with automatic ambient noise notching
     pub fn record_register(&mut self, slave: u8, addr: u16, val: u16, timestamp_us: u64) {
         let key = format!("{}:{}", slave, addr);
         if !self.is_active {
-            // Update baseline when not in active capture
+            // While monitoring baseline, automatically notch any bits that fluctuate on their own
+            if let Some(&prev_val) = self.baseline_registers.get(&key) {
+                let ambient_diff = val ^ prev_val;
+                if ambient_diff != 0 {
+                    let entry = self.register_notches.entry(key.clone()).or_insert(0);
+                    *entry |= ambient_diff;
+                }
+            }
             self.baseline_registers.insert(key.clone(), val);
         }
         self.current_registers.insert(key, (val, timestamp_us));
     }
 
-    /// Record an incoming CAN frame payload
+    /// Record an incoming CAN frame payload with automatic ambient noise notching
     pub fn record_can_frame(&mut self, id: CanId, data: &[u8], timestamp_us: u64) {
         let mut bytes = [0u8; 8];
         let len = data.len().min(8);
         bytes[..len].copy_from_slice(&data[..len]);
 
         if !self.is_active {
+            // While monitoring baseline, automatically notch any bits that fluctuate on their own
+            if let Some(&prev_bytes) = self.baseline_can_slots.get(&id) {
+                let notch = self.can_notches.entry(id).or_insert([0u8; 8]);
+                for i in 0..8 {
+                    notch[i] |= bytes[i] ^ prev_bytes[i];
+                }
+            }
             self.baseline_can_slots.insert(id, bytes);
         }
         self.current_can_slots.insert(id, (bytes, timestamp_us));
     }
 
-    /// Stop the capture window and return all isolated deltas
+    /// Manually apply a notch mask to suppress noisy ambient bits on a specific register
+    pub fn notch_register(&mut self, slave: u8, addr: u16, mask: u16) {
+        let key = format!("{}:{}", slave, addr);
+        let entry = self.register_notches.entry(key).or_insert(0);
+        *entry |= mask;
+    }
+
+    /// Manually apply a notch mask to suppress noisy ambient bits on a specific CAN arbitration ID
+    pub fn notch_can_id(&mut self, id: CanId, mask: [u8; 8]) {
+        let entry = self.can_notches.entry(id).or_insert([0u8; 8]);
+        for i in 0..8 {
+            entry[i] |= mask[i];
+        }
+    }
+
+    /// Stop the capture window and return all isolated deltas, filtering out notched ambient noise
     pub fn stop(&mut self, stop_timestamp_us: u64) -> DiffCaptureReport {
         self.is_active = false;
         let mut mutations = Vec::new();
 
-        // 1. Check Modbus register deltas
+        // 1. Check Modbus register deltas with ambient noise suppression
         for (key, (current_val, change_time)) in &self.current_registers {
             let baseline_val = self.baseline_registers.get(key).copied().unwrap_or(0);
-            if *current_val != baseline_val {
-                let diff_bits = current_val ^ baseline_val;
+            let notch_mask = self.register_notches.get(key).copied().unwrap_or(0);
+
+            let raw_diff = current_val ^ baseline_val;
+            let active_diff = raw_diff & !notch_mask;
+
+            if active_diff != 0 {
                 mutations.push(MutatedEntity {
                     entity_type: "ModbusRegister".to_string(),
                     identifier: format!("Register {}", key),
                     baseline_value_hex: format!("0x{:04X}", baseline_val),
                     mutated_value_hex: format!("0x{:04X}", current_val),
-                    bitmask_diff: format!("0x{:04X}", diff_bits),
+                    bitmask_diff: format!("0x{:04X}", active_diff),
                     first_change_timestamp_us: *change_time,
                 });
             }
         }
 
-        // 2. Check CAN frame deltas
+        // 2. Check CAN frame deltas with ambient noise suppression
         for (id, (current_bytes, change_time)) in &self.current_can_slots {
             let baseline_bytes = self.baseline_can_slots.get(id).copied().unwrap_or([0; 8]);
-            if *current_bytes != baseline_bytes {
-                let mut diff = [0u8; 8];
-                for i in 0..8 {
-                    diff[i] = current_bytes[i] ^ baseline_bytes[i];
+            let notch_mask = self.can_notches.get(id).copied().unwrap_or([0u8; 8]);
+
+            let mut raw_diff = [0u8; 8];
+            let mut active_diff = [0u8; 8];
+            let mut has_active_mutation = false;
+
+            for i in 0..8 {
+                raw_diff[i] = current_bytes[i] ^ baseline_bytes[i];
+                active_diff[i] = raw_diff[i] & !notch_mask[i];
+                if active_diff[i] != 0 {
+                    has_active_mutation = true;
                 }
+            }
+
+            if has_active_mutation {
                 mutations.push(MutatedEntity {
                     entity_type: "CanFrame".to_string(),
-                    identifier: format!("CAN ID {:?}", id),
+                    identifier: match id {
+                        CanId::Standard(v) => format!("CAN 0x{:03X}", v),
+                        CanId::Extended(v) => format!("CAN 0x{:08X}", v),
+                    },
                     baseline_value_hex: hex_str(&baseline_bytes),
                     mutated_value_hex: hex_str(current_bytes),
-                    bitmask_diff: hex_str(&diff),
+                    bitmask_diff: hex_str(&active_diff),
                     first_change_timestamp_us: *change_time,
                 });
             }
@@ -136,8 +195,12 @@ impl DiffCaptureSession {
     }
 }
 
-fn hex_str(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(" ")
+fn hex_str(bytes: &[u8; 8]) -> String {
+    bytes
+        .iter()
+        .map(|b| format!("{:02X}", b))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -148,24 +211,62 @@ mod tests {
     fn test_diff_capture_isolates_mutated_register() {
         let mut session = DiffCaptureSession::new();
 
-        // Baseline: Register 1:100 is 0x0000, 1:101 is 0x1234
-        session.record_register(1, 100, 0x0000, 1_000_000);
-        session.record_register(1, 101, 0x1234, 1_000_000);
+        // Baseline: Register 1:40001 = 0x0000
+        session.record_register(1, 40001, 0x0000, 1000);
+        session.start(2000);
 
-        // Start physical watch capture
-        session.start(2_000_000);
+        // Operator flips a physical switch: Register 1:40001 changes to 0x0001
+        session.record_register(1, 40001, 0x0001, 2500);
 
-        // Physical action occurs: Register 1:100 flips to 0x0001 (e.g., motor turned on)
-        // Register 1:101 stays 0x1234
-        session.record_register(1, 100, 0x0001, 2_500_000);
-        session.record_register(1, 101, 0x1234, 2_500_000);
-
-        // Stop capture
-        let report = session.stop(3_000_000);
+        let report = session.stop(3000);
         assert_eq!(report.total_mutations_detected, 1);
-        assert_eq!(report.mutations[0].identifier, "Register 1:100");
-        assert_eq!(report.mutations[0].baseline_value_hex, "0x0000");
-        assert_eq!(report.mutations[0].mutated_value_hex, "0x0001");
-        assert_eq!(report.mutations[0].bitmask_diff, "0x0001");
+        let m = &report.mutations[0];
+        assert_eq!(m.entity_type, "ModbusRegister");
+        assert_eq!(m.bitmask_diff, "0x0001");
+        assert_eq!(m.mutated_value_hex, "0x0001");
+    }
+
+    #[test]
+    fn test_diff_capture_auto_notches_ambient_noise() {
+        let mut session = DiffCaptureSession::new();
+
+        // Simulate ambient sensor noise prior to start() on Reg 1:40001 (e.g. low nibble jitter 0x0002 <-> 0x0003)
+        session.record_register(1, 40001, 0x0002, 100);
+        session.record_register(1, 40001, 0x0003, 200); // Bit 0 jittered!
+        session.record_register(1, 40001, 0x0002, 300);
+
+        // Start capture window
+        session.start(1000);
+
+        // Scenario A: Jitter on bit 0 continues (0x0002 -> 0x0003)
+        // Scenario B: Operator flips switch connected to bit 8 (0x0002 -> 0x0103)
+        session.record_register(1, 40001, 0x0103, 1500);
+
+        let report = session.stop(2000);
+        assert_eq!(report.total_mutations_detected, 1);
+        let m = &report.mutations[0];
+        // Jitter on bit 0 was auto-notched, only bit 8 (0x0100) is reported!
+        assert_eq!(m.bitmask_diff, "0x0100");
+    }
+
+    #[test]
+    fn test_diff_capture_can_auto_notching() {
+        let mut session = DiffCaptureSession::new();
+        let id = CanId::Standard(0x200);
+
+        // Rolling counter in Byte 0 prior to capture
+        session.record_can_frame(id, &[0x01, 0x00, 0x00, 0x00], 100);
+        session.record_can_frame(id, &[0x02, 0x00, 0x00, 0x00], 200);
+
+        session.start(1000);
+
+        // Rolling counter continues to Byte 0 = 0x03, but operator activates actuator on Byte 2 = 0x80
+        session.record_can_frame(id, &[0x03, 0x00, 0x80, 0x00], 1500);
+
+        let report = session.stop(2000);
+        assert_eq!(report.total_mutations_detected, 1);
+        let m = &report.mutations[0];
+        // Byte 0 was auto-notched, so active diff only reports Byte 2 (0x80)
+        assert!(m.bitmask_diff.contains("80"));
     }
 }

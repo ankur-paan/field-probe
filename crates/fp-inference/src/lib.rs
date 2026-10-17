@@ -11,7 +11,11 @@ pub mod sniffer;
 
 pub use bus_load::{calculate_frame_bit_length, BusLoadEstimator, BusLoadReport};
 pub use catalog::{InferredRegisterEntry, RegisterCatalog};
-pub use decoder::{decode_float32, decode_register_representations, InferredValue, WordOrder};
+pub use decoder::{
+    decode_ascii_string, decode_fixed_point_i16, decode_fixed_point_u16, decode_float32,
+    decode_float64, decode_int32, decode_mod10000, decode_register_representations,
+    decode_uint32, InferredValue, WordOrder,
+};
 pub use diff_capture::{DiffCaptureReport, DiffCaptureSession, MutatedEntity};
 pub use engine::{InferenceEngine, InferenceSummary};
 pub use histogram::{IdTimingTracker, PeriodicStats, TimingHistogramEngine, WelfordTracker};
