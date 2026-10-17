@@ -59,13 +59,26 @@ Follow these steps when diagnosing an unknown cabinet:
    ```
 
 6. **Export Field Artifacts:**  
-   Generate standard configurations for PLC/SCADA systems:
+   Export reverse-engineered database models and telemetry streams for SCADA/Wireshark tools:
    ```bash
+   # Export Vector DBC database (synthesizes CAN messages and signal bit-slices):
    fp export --format dbc
-   fp export --format pcapng
-   fp export --format telegraf
-   fp export --format nodered
+   # Or using short flag:
+   fp export -f dbc
+   # Or using equals syntax:
+   fp export --format=dbc
+
+   # Export Wireshark PCAP-NG capture file:
+   fp export -f pcapng
+
+   # Export industrial collector configs:
+   fp export -f telegraf
+   fp export -f nodered
+   fp export -f json
    ```
+
+   > [!NOTE]
+   > When exporting DBC (`--format dbc`), `fp` inspects active CAN sniffer slots. It synthesizes valid Vector DBC messages (`BO_`) and 8-bit signal definitions (`SG_`) for all observed CAN identifiers, preserving cycle intervals and payload layouts.
 
 ---
 
@@ -84,11 +97,14 @@ fp dashboard --interface can0
 fp dashboard --replay sample_run.candump
 ```
 
-
 - **System Header:** Shows live version, safety tier status, Zero-TX verification, bus lock state, discovered register counts, active CAN nodes, and periodic broadcast loops.
-- **Tab 1 — Register Catalog:** Real-time table of discovered Modbus holding registers, raw hex, polling frequency (Hz), jitter (ms), inferred data representation, and statistical confidence score.
+- **Tab 1 — Register Catalog:** Real-time table of discovered field entities across all supported serial protocols:
+  - **Modbus RTU:** Function codes, slave addresses, holding registers, polling frequency (Hz), jitter (ms), and inferred types.
+  - **BACnet MS/TP:** Source address, destination address, and frame types (Token, Poll For Master, Data).
+  - **DNP3:** Master/Outstation addresses, function codes, and object counts.
+  - **Unknown / Proprietary Serial:** Hypothesized frame structures from `UnknownFramer` labeled `UnknownProto` with field offsets, lengths, and confidence scores.
 - **Tab 2 — CAN Sniffer:** CAN bus monitor with bitwise XOR mutation tracking (`cansniffer` algorithm), DLC, payload, and periodic broadcast frequency detection.
-- **Tab 3 — Compliance Audit:** Bus health score meter, total analyzed frames, CRC errors, protocol violations, and detailed diagnostic findings with physical wiring hints.
+- **Tab 3 — Compliance Audit:** Bus health score meter, total analyzed frames, CRC errors, protocol violations, and detailed diagnostic findings with physical wiring hints. Live event ingestion continuously recalculates bus health.
 - **Tab 4 — Differential Capture:** Physical event correlation engine. Press `[d]` to snapshot baseline; toggle a switch or sensor on the field bus, then press `[d]` to stop and isolate exact bit mutations.
 
 ### Keyboard Shortcuts

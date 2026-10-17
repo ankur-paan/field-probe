@@ -151,7 +151,9 @@ fn print_help() {
     println!("OPTIONS:");
     println!("  -i, --interface <ID>    Bind directly to physical/virtual interface (e.g. can0, slcan0, COM3)");
     println!("  -r, --replay <FILE>     Replay events from capture file (.pcapng, candump log, or raw binary)");
-    println!("  -f, --format <FMT>      Export artifact format (dbc, pcapng, telegraf, nodered, json)\n");
+    println!(
+        "  -f, --format <FMT>      Export artifact format (dbc, pcapng, telegraf, nodered, json)\n"
+    );
     println!("SAFETY INVARIANT:");
     println!("  All interfaces default strictly to Tier-0 PassiveListenOnly (Zero-TX).");
     println!("==========================================================================");
@@ -438,10 +440,7 @@ async fn run_serve_command(port: u16) -> Result<(), Box<dyn std::error::Error>> 
         "  Register Map:    http://127.0.0.1:{}/api/v1/catalog",
         port
     );
-    println!(
-        "  Compliance:      http://127.0.0.1:{}/api/v1/audit",
-        port
-    );
+    println!("  Compliance:      http://127.0.0.1:{}/api/v1/audit", port);
     println!(
         "  SSE Stream:      http://127.0.0.1:{}/api/v1/events/sse",
         port

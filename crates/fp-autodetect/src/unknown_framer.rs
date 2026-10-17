@@ -385,9 +385,9 @@ fn detect_trailing_checksum(matrix: &[&[u8]]) -> Option<CrcMatchResult> {
     }
 
     // 2. 8-bit Two's Complement LRC (Modbus ASCII style: (!sum) + 1 == last byte)
-    let lrc_twos_matched = matrix.iter().all(|row| {
-        crate::crc::modbus_ascii_lrc(&row[..len - 1]) == row[len - 1]
-    });
+    let lrc_twos_matched = matrix
+        .iter()
+        .all(|row| crate::crc::modbus_ascii_lrc(&row[..len - 1]) == row[len - 1]);
     if lrc_twos_matched {
         return Some(CrcMatchResult {
             name: "Two's Complement LRC-8".to_string(),
@@ -408,9 +408,9 @@ fn detect_trailing_checksum(matrix: &[&[u8]]) -> Option<CrcMatchResult> {
     }
 
     // 4. BACnet MS/TP CRC-8 (polynomial 0x11D reflected 0x8C)
-    let bacnet_crc8_matched = matrix.iter().all(|row| {
-        crate::crc::bacnet_crc8(&row[..len - 1]) == row[len - 1]
-    });
+    let bacnet_crc8_matched = matrix
+        .iter()
+        .all(|row| crate::crc::bacnet_crc8(&row[..len - 1]) == row[len - 1]);
     if bacnet_crc8_matched {
         return Some(CrcMatchResult {
             name: "CRC-8/BACnet (0x8C)".to_string(),
@@ -430,9 +430,7 @@ fn detect_trailing_checksum(matrix: &[&[u8]]) -> Option<CrcMatchResult> {
     }
 
     // 6. DNP3 CRC-16 (IEEE 1815 reflected 0xA6BC, Little-Endian trailer)
-    let dnp3_crc_matched = matrix
-        .iter()
-        .all(|row| crate::crc::verify_dnp3_crc16(row));
+    let dnp3_crc_matched = matrix.iter().all(|row| crate::crc::verify_dnp3_crc16(row));
     if dnp3_crc_matched {
         return Some(CrcMatchResult {
             name: "CRC-16/DNP3 (0xA6BC LE)".to_string(),
@@ -620,4 +618,3 @@ mod tests {
         assert_eq!(res.width, 2);
     }
 }
-

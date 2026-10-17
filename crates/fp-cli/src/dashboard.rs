@@ -214,15 +214,20 @@ impl DashboardState {
                     matched_known = true;
                     let slice = &chunk.data[start..start + len];
                     if let Some(mstp) = fp_dissectors::dissect_bacnet_mstp(slice) {
-                        self.engine.catalog.insert_or_update(fp_inference::InferredRegisterEntry {
-                            node_or_slave: format!("BACnet_{}", mstp.source_address),
-                            address: mstp.destination_address as u32,
-                            polling_frequency_hz: 1.0,
-                            jitter_ms: 0.0,
-                            raw_hex: format!("0x{:02X}", mstp.frame_type as u8),
-                            plausible_type: format!("BACnet MS/TP ({})", mstp.frame_type.name()),
-                            confidence: 0.98,
-                        });
+                        self.engine
+                            .catalog
+                            .insert_or_update(fp_inference::InferredRegisterEntry {
+                                node_or_slave: format!("BACnet_{}", mstp.source_address),
+                                address: mstp.destination_address as u32,
+                                polling_frequency_hz: 1.0,
+                                jitter_ms: 0.0,
+                                raw_hex: format!("0x{:02X}", mstp.frame_type as u8),
+                                plausible_type: format!(
+                                    "BACnet MS/TP ({})",
+                                    mstp.frame_type.name()
+                                ),
+                                confidence: 0.98,
+                            });
                     }
                 }
 
@@ -232,19 +237,21 @@ impl DashboardState {
                     matched_known = true;
                     let slice = &chunk.data[start..start + len];
                     if let Some(dnp3) = fp_dissectors::dissect_dnp3(slice) {
-                        self.engine.catalog.insert_or_update(fp_inference::InferredRegisterEntry {
-                            node_or_slave: format!("DNP3_{}", dnp3.source),
-                            address: dnp3.destination as u32,
-                            polling_frequency_hz: 1.0,
-                            jitter_ms: 0.0,
-                            raw_hex: format!("{:?}", dnp3.function_code),
-                            plausible_type: format!(
-                                "DNP3 {:?} ({} objs)",
-                                dnp3.function_code,
-                                dnp3.objects.len()
-                            ),
-                            confidence: 0.98,
-                        });
+                        self.engine
+                            .catalog
+                            .insert_or_update(fp_inference::InferredRegisterEntry {
+                                node_or_slave: format!("DNP3_{}", dnp3.source),
+                                address: dnp3.destination as u32,
+                                polling_frequency_hz: 1.0,
+                                jitter_ms: 0.0,
+                                raw_hex: format!("{:?}", dnp3.function_code),
+                                plausible_type: format!(
+                                    "DNP3 {:?} ({} objs)",
+                                    dnp3.function_code,
+                                    dnp3.objects.len()
+                                ),
+                                confidence: 0.98,
+                            });
                     }
                 }
 
@@ -253,19 +260,21 @@ impl DashboardState {
                     let framer = fp_autodetect::UnknownFramer::new();
                     if let Some(hyp) = framer.infer_from_raw_stream(&chunk.data) {
                         for field in &hyp.fields {
-                            self.engine.catalog.insert_or_update(fp_inference::InferredRegisterEntry {
-                                node_or_slave: "UnknownProto".to_string(),
-                                address: field.start_byte as u32,
-                                polling_frequency_hz: 1.0,
-                                jitter_ms: 0.0,
-                                raw_hex: format!("{}B", field.length),
-                                plausible_type: format!(
-                                    "{}: {}",
-                                    field.field_type.name(),
-                                    field.description
-                                ),
-                                confidence: hyp.confidence,
-                            });
+                            self.engine.catalog.insert_or_update(
+                                fp_inference::InferredRegisterEntry {
+                                    node_or_slave: "UnknownProto".to_string(),
+                                    address: field.start_byte as u32,
+                                    polling_frequency_hz: 1.0,
+                                    jitter_ms: 0.0,
+                                    raw_hex: format!("{}B", field.length),
+                                    plausible_type: format!(
+                                        "{}: {}",
+                                        field.field_type.name(),
+                                        field.description
+                                    ),
+                                    confidence: hyp.confidence,
+                                },
+                            );
                         }
                     }
                 }
@@ -1134,4 +1143,3 @@ mod tests {
         assert!(!unknown_entries.is_empty());
     }
 }
-
