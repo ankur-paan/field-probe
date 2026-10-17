@@ -12,6 +12,7 @@ pub enum McpToolName {
     LoadSecurityKey,
     RequestActiveProbe,
     ExportBusArtifacts,
+    LoadBusDatabase,
 }
 
 impl McpToolName {
@@ -26,6 +27,7 @@ impl McpToolName {
             Self::LoadSecurityKey => "load_security_key",
             Self::RequestActiveProbe => "request_active_probe",
             Self::ExportBusArtifacts => "export_bus_artifacts",
+            Self::LoadBusDatabase => "load_bus_database",
         }
     }
 }
@@ -150,6 +152,20 @@ pub fn get_tool_definitions() -> Vec<McpToolDefinition> {
                 "required": ["format"]
             }),
         },
+        McpToolDefinition {
+            name: "load_bus_database".to_string(),
+            description: "Load a Vector DBC (.dbc) database file to decode CAN message frames into named engineering signals.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "Full text content of the Vector CANdb++ (.dbc) file"
+                    }
+                },
+                "required": ["content"]
+            }),
+        },
     ]
 }
 
@@ -160,6 +176,6 @@ mod tests {
     #[test]
     fn test_all_tools_defined() {
         let tools = get_tool_definitions();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 10);
     }
 }

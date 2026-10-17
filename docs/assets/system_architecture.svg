@@ -39,7 +39,7 @@
   <text x="620" y="48" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="700" font-size="14">Interfaces</text>
   <rect x="535" y="70" width="170" height="48" rx="5" fill="#ecfdf5" stroke="#10b981"/>
   <text x="620" y="94" text-anchor="middle" fill="#065f46" font-family="system-ui, sans-serif" font-weight="700" font-size="12">fp-mcp Server</text>
-  <text x="620" y="108" text-anchor="middle" fill="#047857" font-family="system-ui, sans-serif" font-size="10">8 MCP Diagnostic Tools</text>
+  <text x="620" y="108" text-anchor="middle" fill="#047857" font-family="system-ui, sans-serif" font-size="10">10 MCP Diagnostic Tools</text>
 
   <rect x="535" y="130" width="170" height="42" rx="5" fill="#ffffff" stroke="#94a3b8"/>
   <text x="620" y="152" text-anchor="middle" fill="#334155" font-family="system-ui, sans-serif" font-weight="600" font-size="12">fp-server (Axum)</text>
