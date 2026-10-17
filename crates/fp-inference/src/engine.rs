@@ -5,16 +5,18 @@ use fp_crypto::{
     auto_decrypt_payload, calculate_shannon_entropy, is_high_entropy_payload, KeyRing,
 };
 use fp_dissectors::{
-    dissect_canopen, dissect_j1939, dissect_uds, parse_j1939_header, BacnetMstpFrame,
-    CanOpenPayload, Dnp3Frame, IsoTpReassembler, J1939Payload, J1939TransportReassembler,
-    ModbusPdu, ModbusRtuAdu, UdsMessage, PGN_COMPONENT_ID, PGN_DM1, PGN_EEC1, PGN_ET1, PGN_TP_CM,
-    PGN_TP_DT, PGN_VIN,
+    dissect_autosar_nm, dissect_canopen, dissect_ccp, dissect_j1939, dissect_obd2, dissect_uds,
+    dissect_xcp, parse_j1939_header, BacnetMstpFrame, CanOpenPayload, Dnp3Frame, IsoTpReassembler,
+    J1939Payload, J1939TransportReassembler, ModbusPdu, ModbusRtuAdu, Obd2Message, UdsMessage,
+    PGN_ADDRESS_CLAIMED, PGN_COMPONENT_ID, PGN_DM1, PGN_EEC1, PGN_ET1, PGN_TP_CM, PGN_TP_DT,
+    PGN_VIN,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
     bus_load::BusLoadEstimator,
     catalog::{InferredRegisterEntry, RegisterCatalog},
+    dbc::DbcDatabase,
     diff_capture::{DiffCaptureReport, DiffCaptureSession},
     histogram::{TimingHistogramEngine, WelfordTracker},
     pairing::{MatchedTransaction, TransactionMatcher},
@@ -45,6 +47,7 @@ pub struct InferenceEngine {
     pub keyring: KeyRing,
     pub j1939_reassembler: J1939TransportReassembler,
     pub isotp_reassembler: IsoTpReassembler,
+    pub dbc_database: Option<DbcDatabase>,
 }
 
 impl InferenceEngine {
@@ -61,7 +64,20 @@ impl InferenceEngine {
             keyring: KeyRing::new(),
             j1939_reassembler: J1939TransportReassembler::new(),
             isotp_reassembler: IsoTpReassembler::new(5_000_000),
+            dbc_database: None,
         }
+    }
+
+    /// Set or replace the active Vector CANdb++ database
+    pub fn set_dbc_database(&mut self, db: DbcDatabase) {
+        self.dbc_database = Some(db);
+    }
+
+    /// Parse and load a Vector DBC database directly from text
+    pub fn load_dbc(&mut self, content: &str) -> Result<(), String> {
+        let db = DbcDatabase::parse(content)?;
+        self.dbc_database = Some(db);
+        Ok(())
     }
 
     /// Process an incoming Modbus RTU frame
@@ -373,7 +389,36 @@ impl InferenceEngine {
                                 confidence: 1.0,
                             });
                         }
+                        J1939Payload::AddressClaimed { name } => {
+                            self.catalog.insert_or_update(InferredRegisterEntry {
+                                node_or_slave: node_str.clone(),
+                                address: PGN_ADDRESS_CLAIMED,
+                                polling_frequency_hz: hz,
+                                jitter_ms: jitter,
+                                raw_hex: format!("{:016X}", name.raw),
+                                plausible_type: format!(
+                                    "J1939 NAME: IndGroup={}, Func={}, Identity={}",
+                                    name.industry_group_name,
+                                    name.function_name,
+                                    name.identity_number
+                                ),
+                                confidence: 1.0,
+                            });
+                        }
                         _ => {}
+                    }
+                }
+
+                // Check 29-bit Extended Diagnostic ISO-TP (UDS/OBD on PGN 0xDA00 / 0xDB00)
+                if (can_id_u32 & 0x00FF0000) == 0x00DA0000
+                    || (can_id_u32 & 0x00FF0000) == 0x00DB0000
+                {
+                    if let Some(Ok(pdu)) = self.isotp_reassembler.ingest_frame(
+                        processed_frame.id,
+                        &processed_frame.data,
+                        timestamp_us,
+                    ) {
+                        self.process_diagnostic_pdu(processed_frame.id, &pdu);
                     }
                 }
             }
@@ -387,40 +432,7 @@ impl InferenceEngine {
                         &processed_frame.data,
                         timestamp_us,
                     ) {
-                        if let Some(uds) = dissect_uds(&pdu) {
-                            let node_str = format!("UDS:0x{:03X}", cob_id);
-                            match uds {
-                                UdsMessage::ReadDataByIdentifierResponse { did, data } => {
-                                    self.catalog.insert_or_update(InferredRegisterEntry {
-                                        node_or_slave: node_str,
-                                        address: did as u32,
-                                        polling_frequency_hz: hz,
-                                        jitter_ms: jitter,
-                                        raw_hex: format!("{:02X?}", data),
-                                        plausible_type: format!("UDS DID 0x{:04X} Data", did),
-                                        confidence: 1.0,
-                                    });
-                                }
-                                UdsMessage::SecurityAccessResponse {
-                                    sub_function,
-                                    seed_or_key,
-                                } => {
-                                    self.catalog.insert_or_update(InferredRegisterEntry {
-                                        node_or_slave: node_str,
-                                        address: 0x2700 | (sub_function as u32),
-                                        polling_frequency_hz: hz,
-                                        jitter_ms: jitter,
-                                        raw_hex: format!("{:02X?}", seed_or_key),
-                                        plausible_type: format!(
-                                            "UDS SecurityAccess (SubFunc 0x{:02X}) Challenge",
-                                            sub_function
-                                        ),
-                                        confidence: 1.0,
-                                    });
-                                }
-                                _ => {}
-                            }
-                        }
+                        self.process_diagnostic_pdu(processed_frame.id, &pdu);
                     }
                 }
 
@@ -499,8 +511,257 @@ impl InferenceEngine {
             }
         }
 
+        // C. ASAM MCD-1 XCP / CCP Calibration Dissection
+        let cal_msg = dissect_xcp(&processed_frame.data, false)
+            .or_else(|| dissect_xcp(&processed_frame.data, true))
+            .or_else(|| dissect_ccp(&processed_frame.data, false))
+            .or_else(|| dissect_ccp(&processed_frame.data, true));
+
+        if let Some(cal) = cal_msg {
+            let (hz, jitter) = self.histogram_engine.get_node_timing(processed_frame.id);
+            self.catalog.insert_or_update(InferredRegisterEntry {
+                node_or_slave: format!("XCP_CCP:0x{:X}", processed_frame.id.as_raw()),
+                address: processed_frame.id.as_raw(),
+                polling_frequency_hz: hz,
+                jitter_ms: jitter,
+                raw_hex: format!("{:02X?}", &processed_frame.data[..]),
+                plausible_type: format!("ASAM MCD-1: {:?}", cal),
+                confidence: 0.95,
+            });
+        }
+
+        // D. AUTOSAR CAN Network Management (CAN NM)
+        if let Some(nm) = dissect_autosar_nm(processed_frame.id.as_raw(), &processed_frame.data) {
+            let (hz, jitter) = self.histogram_engine.get_node_timing(processed_frame.id);
+            self.catalog.insert_or_update(InferredRegisterEntry {
+                node_or_slave: format!("CANNM:0x{:02X}", nm.source_node_id),
+                address: 0x400 | (nm.source_node_id as u32),
+                polling_frequency_hz: hz,
+                jitter_ms: jitter,
+                raw_hex: format!("{:02X?}", &processed_frame.data[..]),
+                plausible_type: format!(
+                    "AUTOSAR CAN NM (CBV: 0x{:02X}, ActiveWakeup={})",
+                    nm.control_bit_vector.raw, nm.control_bit_vector.active_wakeup
+                ),
+                confidence: 1.0,
+            });
+        }
+
+        // E. Vector DBC signal unpacking if database is loaded
+        if let Some(dbc) = &self.dbc_database {
+            let extracted = dbc.extract_signals(&processed_frame);
+            if !extracted.is_empty() {
+                let (hz, jitter) = self.histogram_engine.get_node_timing(processed_frame.id);
+                let node_str = format!("DBC:0x{:X}", processed_frame.id.as_raw());
+                for (sig_idx, (sig_name, sig_val)) in extracted.into_iter().enumerate() {
+                    self.catalog.insert_or_update(InferredRegisterEntry {
+                        node_or_slave: node_str.clone(),
+                        address: (processed_frame.id.as_raw() << 8) | (sig_idx as u32),
+                        polling_frequency_hz: hz,
+                        jitter_ms: jitter,
+                        raw_hex: format!("{:02X?}", &processed_frame.data[..]),
+                        plausible_type: format!("Signal {}: {:.4}", sig_name, sig_val),
+                        confidence: 1.0,
+                    });
+                }
+            }
+        }
+
         // Ingest into cansniffer delta/notch engine
         self.sniffer_engine.ingest_frame(&processed_frame)
+    }
+
+    /// Process reassembled ISO-TP diagnostic PDU across UDS and OBD-II protocols
+    fn process_diagnostic_pdu(&mut self, can_id: fp_core::CanId, pdu: &[u8]) {
+        let cob_id = match can_id {
+            fp_core::CanId::Standard(s) => s as u32,
+            fp_core::CanId::Extended(e) => e,
+        };
+        let (hz, jitter) = self.histogram_engine.get_node_timing(can_id);
+
+        // 1. Check ISO 14229 UDS
+        if let Some(uds) = dissect_uds(pdu) {
+            let node_str = format!("UDS:0x{:X}", cob_id);
+            match uds {
+                UdsMessage::ReadDataByIdentifierResponse { did, data } => {
+                    self.catalog.insert_or_update(InferredRegisterEntry {
+                        node_or_slave: node_str,
+                        address: did as u32,
+                        polling_frequency_hz: hz,
+                        jitter_ms: jitter,
+                        raw_hex: format!("{:02X?}", data),
+                        plausible_type: format!("UDS DID 0x{:04X} Data", did),
+                        confidence: 1.0,
+                    });
+                }
+                UdsMessage::SecurityAccessResponse {
+                    sub_function,
+                    seed_or_key,
+                } => {
+                    self.catalog.insert_or_update(InferredRegisterEntry {
+                        node_or_slave: node_str,
+                        address: 0x2700 | (sub_function as u32),
+                        polling_frequency_hz: hz,
+                        jitter_ms: jitter,
+                        raw_hex: format!("{:02X?}", seed_or_key),
+                        plausible_type: format!(
+                            "UDS SecurityAccess (SubFunc 0x{:02X}) Challenge",
+                            sub_function
+                        ),
+                        confidence: 1.0,
+                    });
+                }
+                UdsMessage::DiagnosticSessionControlResponse {
+                    session_type,
+                    p2_server_max_ms,
+                } => {
+                    let p2_str = p2_server_max_ms
+                        .map(|m| format!("{}ms", m))
+                        .unwrap_or_else(|| "default".to_string());
+                    self.catalog.insert_or_update(InferredRegisterEntry {
+                        node_or_slave: node_str,
+                        address: 0x1000 | (session_type as u32),
+                        polling_frequency_hz: hz,
+                        jitter_ms: jitter,
+                        raw_hex: format!("P2: {}", p2_str),
+                        plausible_type: format!("UDS Session: 0x{:02X} Control", session_type),
+                        confidence: 1.0,
+                    });
+                }
+                UdsMessage::RoutineControlResponse {
+                    routine_type,
+                    routine_id,
+                    routine_status_record,
+                } => {
+                    self.catalog.insert_or_update(InferredRegisterEntry {
+                        node_or_slave: node_str,
+                        address: 0x3100_0000 | (routine_id as u32),
+                        polling_frequency_hz: hz,
+                        jitter_ms: jitter,
+                        raw_hex: format!("{:02X?}", routine_status_record),
+                        plausible_type: format!(
+                            "UDS Routine Type 0x{:02X} (0x{:04X})",
+                            routine_type, routine_id
+                        ),
+                        confidence: 1.0,
+                    });
+                }
+                UdsMessage::RequestDownloadResponse {
+                    max_number_of_block_length,
+                } => {
+                    self.catalog.insert_or_update(InferredRegisterEntry {
+                        node_or_slave: node_str,
+                        address: 0x3400,
+                        polling_frequency_hz: hz,
+                        jitter_ms: jitter,
+                        raw_hex: format!("MaxBlockLen: {:?}", max_number_of_block_length),
+                        plausible_type: "UDS RequestDownload Accepted".to_string(),
+                        confidence: 1.0,
+                    });
+                }
+                UdsMessage::TransferDataResponse {
+                    block_sequence_counter,
+                    ..
+                } => {
+                    self.catalog.insert_or_update(InferredRegisterEntry {
+                        node_or_slave: node_str,
+                        address: 0x3600 | (block_sequence_counter as u32),
+                        polling_frequency_hz: hz,
+                        jitter_ms: jitter,
+                        raw_hex: format!("BSC: 0x{:02X}", block_sequence_counter),
+                        plausible_type: format!(
+                            "UDS Flashing Transfer Block 0x{:02X}",
+                            block_sequence_counter
+                        ),
+                        confidence: 1.0,
+                    });
+                }
+                UdsMessage::ReadDtcInformationResponse { dtcs, .. } => {
+                    for (i, dtc) in dtcs.iter().enumerate() {
+                        self.catalog.insert_or_update(InferredRegisterEntry {
+                            node_or_slave: node_str.clone(),
+                            address: 0x1900_0000 | (i as u32),
+                            polling_frequency_hz: hz,
+                            jitter_ms: jitter,
+                            raw_hex: format!("DTC:{} Status:0x{:02X}", dtc.code, dtc.status_mask),
+                            plausible_type: format!(
+                                "UDS DTC #{} [{}] Status:0x{:02X}",
+                                i + 1,
+                                dtc.code,
+                                dtc.status_mask
+                            ),
+                            confidence: 1.0,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // 2. Check SAE J1979 OBD-II
+        if let Some(obd) = dissect_obd2(pdu) {
+            let node_str = format!("OBD:0x{:X}", cob_id);
+            match obd {
+                Obd2Message::ShowCurrentData {
+                    pid,
+                    pid_name,
+                    formatted_value,
+                    ..
+                } => {
+                    let val_str = formatted_value.unwrap_or_else(|| "N/A".to_string());
+                    self.catalog.insert_or_update(InferredRegisterEntry {
+                        node_or_slave: node_str,
+                        address: 0x0100 | (pid as u32),
+                        polling_frequency_hz: hz,
+                        jitter_ms: jitter,
+                        raw_hex: val_str.clone(),
+                        plausible_type: format!(
+                            "OBD-II PID 0x{:02X} ({}): {}",
+                            pid, pid_name, val_str
+                        ),
+                        confidence: 1.0,
+                    });
+                }
+                Obd2Message::ShowStoredDtc { dtcs } | Obd2Message::ShowPendingDtc { dtcs } => {
+                    for (i, dtc) in dtcs.into_iter().enumerate() {
+                        self.catalog.insert_or_update(InferredRegisterEntry {
+                            node_or_slave: node_str.clone(),
+                            address: 0x0300 | (i as u32),
+                            polling_frequency_hz: hz,
+                            jitter_ms: jitter,
+                            raw_hex: dtc.code.clone(),
+                            plausible_type: format!(
+                                "OBD-II DTC {}: {}",
+                                dtc.code,
+                                dtc.description.unwrap_or_default()
+                            ),
+                            confidence: 1.0,
+                        });
+                    }
+                }
+                Obd2Message::RequestVehicleInfo {
+                    info_type,
+                    info_name,
+                    text_value,
+                    ..
+                } => {
+                    let text = text_value.unwrap_or_default();
+                    self.catalog.insert_or_update(InferredRegisterEntry {
+                        node_or_slave: node_str,
+                        address: 0x0900 | (info_type as u32),
+                        polling_frequency_hz: hz,
+                        jitter_ms: jitter,
+                        raw_hex: text.clone(),
+                        plausible_type: format!(
+                            "OBD-II Mode 09 Info 0x{:02X} ({}): {}",
+                            info_type, info_name, text
+                        ),
+                        confidence: 1.0,
+                    });
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Ingest a dissected DNP3 frame into the semantic inference catalog
@@ -920,5 +1181,155 @@ mod tests {
             .expect("BACnet entry");
         assert!(bac_entry.plausible_type.contains("Token Pass"));
         assert_eq!(bac_entry.confidence, 1.0);
+    }
+
+    #[test]
+    fn test_inference_engine_obd_dissection_populates_catalog() {
+        let mut engine = InferenceEngine::new(500_000, 1000);
+
+        // OBD-II Mode 01 PID 0x0C (Engine RPM = 2000.0 RPM) on 0x7E8
+        // Single Frame: len=4, SID=0x41, PID=0x0C, A=0x1F, B=0x40 => ((31 * 256) + 64) / 4 = 2000.0
+        let obd_rpm =
+            CanFrame::new_standard(0x7E8, &[0x04, 0x41, 0x0C, 0x1F, 0x40, 0x00, 0x00, 0x00]);
+        engine.ingest_can_frame(&obd_rpm, 1_000_000);
+
+        let entry = engine
+            .catalog
+            .entries
+            .get("OBD:0x7E8:268") // 0x0100 | 0x0C = 268
+            .expect("OBD RPM entry");
+        assert!(entry.plausible_type.contains("EngineRPM"));
+        assert!(entry.plausible_type.contains("2000 rpm"));
+        assert_eq!(entry.confidence, 1.0);
+
+        // OBD-II Mode 03 (Report DTCs: P0100) on 0x7E8
+        // Single Frame: len=4, SID=0x43, count=1, P0100 = 0x01, 0x00
+        let obd_dtc =
+            CanFrame::new_standard(0x7E8, &[0x04, 0x43, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00]);
+        engine.ingest_can_frame(&obd_dtc, 1_010_000);
+
+        let dtc_entry = engine
+            .catalog
+            .entries
+            .get("OBD:0x7E8:768") // (3 << 8) | 0 = 768
+            .expect("OBD DTC entry");
+        assert!(dtc_entry.plausible_type.contains("P0100"));
+        assert_eq!(dtc_entry.confidence, 1.0);
+    }
+
+    #[test]
+    fn test_inference_engine_extended_uds_flashing_populates_catalog() {
+        let mut engine = InferenceEngine::new(500_000, 1000);
+
+        // Extended 29-bit CAN ID 0x18DA00F1 (PGN 0xDA00 = ISO-TP physical)
+        // UDS RoutineControl Positive Response (0x71, StartRoutine=1, RoutineID=0x0203)
+        let f_routine = CanFrame::new_extended(
+            0x18DA00F1,
+            &[0x05, 0x71, 0x01, 0x02, 0x03, 0x00, 0xAA, 0xBB],
+        );
+        engine.ingest_can_frame(&f_routine, 1_000_000);
+
+        let routine_entry = engine
+            .catalog
+            .entries
+            .get("UDS:0x18DA00F1:822084099") // 0x3100_0000 | 0x0203 = 822084099
+            .expect("Routine entry");
+        assert!(routine_entry.plausible_type.contains("Routine"));
+        assert!(routine_entry.plausible_type.contains("0x0203"));
+
+        // UDS TransferData Positive Response (0x76, BlockSeq=0x01)
+        let f_transfer = CanFrame::new_extended(
+            0x18DA00F1,
+            &[0x02, 0x76, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00],
+        );
+        engine.ingest_can_frame(&f_transfer, 1_010_000);
+
+        let transfer_entry = engine
+            .catalog
+            .entries
+            .get("UDS:0x18DA00F1:13825") // 0x3600 | 1 = 13825
+            .expect("Transfer entry");
+        assert!(transfer_entry
+            .plausible_type
+            .contains("Transfer Block 0x01"));
+    }
+
+    #[test]
+    fn test_inference_engine_j1939_address_claimed_populates_catalog() {
+        let mut engine = InferenceEngine::new(500_000, 1000);
+
+        // J1939 Address Claimed (PGN 0x00EE00 = 60928) on CAN ID 0x18EEFF01 (SA 0x01)
+        // 64-bit NAME: ArbitraryAddress=1, IndGroup=1 (On-Highway), VehicleSystem=0, Func=0 (Engine)
+        let name_bytes = [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x90];
+        let f = CanFrame::new_extended(0x18EEFF01, &name_bytes);
+        engine.ingest_can_frame(&f, 1_000_000);
+
+        let entry = engine
+            .catalog
+            .entries
+            .get("J1939:0x01:60928")
+            .expect("Address Claimed entry");
+        assert!(entry.plausible_type.contains("J1939 NAME"));
+        assert!(entry.plausible_type.contains("On-Highway Equipment"));
+    }
+
+    #[test]
+    fn test_inference_engine_xcp_and_can_nm_populates_catalog() {
+        let mut engine = InferenceEngine::new(500_000, 1000);
+
+        // ASAM MCD-1 XCP Connect command (0xFF, 0x00) on 0x300
+        let f_xcp =
+            CanFrame::new_standard(0x300, &[0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        engine.ingest_can_frame(&f_xcp, 1_000_000);
+
+        let xcp_entry = engine
+            .catalog
+            .entries
+            .get("XCP_CCP:0x300:768")
+            .expect("XCP entry");
+        assert!(xcp_entry.plausible_type.contains("ASAM MCD-1"));
+
+        // AUTOSAR CAN Network Management on 0x501 (Node 1, CBV = 0x40 Active Sleep, SleepBit = 0)
+        let f_nm = CanFrame::new_standard(0x501, &[0x01, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        engine.ingest_can_frame(&f_nm, 1_010_000);
+
+        let nm_entry = engine
+            .catalog
+            .entries
+            .get("CANNM:0x01:1025") // 0x400 | 1 = 1025
+            .expect("CAN NM entry");
+        assert!(nm_entry.plausible_type.contains("AUTOSAR CAN NM"));
+    }
+
+    #[test]
+    fn test_inference_engine_dbc_signal_decoding_populates_catalog() {
+        let mut engine = InferenceEngine::new(500_000, 1000);
+
+        let dbc_text = r#"
+BO_ 256 EngineTelemetry: 8 EngineECU
+ SG_ VehicleSpeed : 0|16@1+ (0.01,0) [0|300] "km/h" Gateway
+ SG_ EngineRPM : 16|16@1+ (0.25,0) [0|8000] "rpm" Gateway
+"#;
+        engine.load_dbc(dbc_text).expect("Valid DBC loaded");
+
+        // Frame with VehicleSpeed = 100.00 km/h (raw 10000 = 0x2710) and EngineRPM = 3000.0 rpm (raw 12000 = 0x2EE0)
+        let f = CanFrame::new_standard(256, &[0x10, 0x27, 0xE0, 0x2E, 0x00, 0x00, 0x00, 0x00]);
+        engine.ingest_can_frame(&f, 1_000_000);
+
+        let entry = engine
+            .catalog
+            .entries
+            .get("DBC:0x100:65536") // (256 << 8) | 0
+            .expect("DBC Speed entry");
+        assert!(entry.plausible_type.contains("VehicleSpeed"));
+        assert!(entry.plausible_type.contains("100.0000"));
+
+        let entry_rpm = engine
+            .catalog
+            .entries
+            .get("DBC:0x100:65537") // (256 << 8) | 1
+            .expect("DBC RPM entry");
+        assert!(entry_rpm.plausible_type.contains("EngineRPM"));
+        assert!(entry_rpm.plausible_type.contains("3000.0000"));
     }
 }
