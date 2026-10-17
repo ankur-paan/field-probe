@@ -182,3 +182,74 @@ async fn test_fp_server_sse_streaming() {
     server_handle.abort();
 }
 
+#[tokio::test]
+async fn test_fp_server_audit_and_export_endpoints() {
+    let state = Arc::new(ServerState::new());
+
+    // Record an audit issue
+    {
+        let mut report = state.compliance_report.write().await;
+        let adu = ModbusRtuAdu {
+            slave_id: 1,
+            pdu: ModbusPdu::ReadHoldingRegistersQuery {
+                start_addr: 65530,
+                quantity: 10,
+            },
+            crc16: 0,
+        };
+        report.audit_modbus_adu(&adu);
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_handle = tokio::spawn(run_server(listener, Arc::clone(&state)));
+
+    // 1. Test /api/v1/audit
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(b"GET /api/v1/audit HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+
+    let mut response_bytes = Vec::new();
+    stream.read_to_end(&mut response_bytes).await.unwrap();
+    let response_str = String::from_utf8_lossy(&response_bytes);
+    assert!(response_str.contains("HTTP/1.1 200 OK"));
+    let json_start = response_str.find("\r\n\r\n").unwrap() + 4;
+    let json_val: Value = serde_json::from_str(&response_str[json_start..]).unwrap();
+    assert_eq!(json_val["total_frames_analyzed"], 1);
+    assert_eq!(json_val["protocol_violations"], 1);
+
+    // 2. Test /api/v1/export/pcapng
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(b"GET /api/v1/export/pcapng HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+
+    let mut pcap_response = Vec::new();
+    stream.read_to_end(&mut pcap_response).await.unwrap();
+    let header_end = pcap_response.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let header_str = String::from_utf8_lossy(&pcap_response[..header_end]);
+    assert!(header_str.contains("HTTP/1.1 200 OK"));
+    assert!(header_str.contains("Content-Type: application/vnd.tcpdump.pcap"));
+    let binary_body = &pcap_response[header_end + 4..];
+    // PCAP-NG Section Header Block magic: 0x0A0D0D0A
+    assert_eq!(&binary_body[0..4], &[0x0A, 0x0D, 0x0D, 0x0A]);
+
+    // 3. Test /api/v1/export/json
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(b"GET /api/v1/export/json HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+
+    let mut json_response = Vec::new();
+    stream.read_to_end(&mut json_response).await.unwrap();
+    let json_str = String::from_utf8_lossy(&json_response);
+    assert!(json_str.contains("HTTP/1.1 200 OK"));
+    assert!(json_str.contains("Content-Type: application/json"));
+
+    server_handle.abort();
+}
+

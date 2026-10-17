@@ -91,14 +91,14 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<ServerState>) -> st
 
     // Handle Export endpoints
     if let Some(format) = path.strip_prefix("/api/v1/export/") {
-        let (content_type, body_str) = state.handle_export(format).await;
+        let (content_type, body_bytes) = state.handle_export(format).await;
         let response_headers = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             content_type,
-            body_str.len()
+            body_bytes.len()
         );
         writer.write_all(response_headers.as_bytes()).await?;
-        writer.write_all(body_str.as_bytes()).await?;
+        writer.write_all(&body_bytes).await?;
         writer.flush().await?;
         return Ok(());
     }
@@ -108,6 +108,7 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<ServerState>) -> st
         "/api/v1/dongles" => (200, state.handle_dongles()),
         "/api/v1/bus/summary" => (200, state.handle_bus_summary().await),
         "/api/v1/catalog" => (200, state.handle_catalog().await),
+        "/api/v1/audit" => (200, state.handle_audit().await),
         _ => {
             let not_found = "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
             writer.write_all(not_found.as_bytes()).await?;

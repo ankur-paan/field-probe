@@ -29,9 +29,19 @@ Follow these steps when diagnosing an unknown cabinet:
    Attach the differential probe clips to the active bus lines (A and B, or CAN_H and CAN_L).
 
 2. **Launch field-probe in Passive Mode:**  
-   Execute the CLI binary:
+   Execute the CLI binary to start passive discovery on all detected interfaces:
    ```bash
    fp
+   ```
+   Or specify an explicit hardware interface:
+   ```bash
+   fp --interface can0
+   fp --interface COM3
+   ```
+   To diagnose captured traffic offline without physical hardware, execute replay mode:
+   ```bash
+   fp --replay field_dump.candump
+   fp --replay substation_capture.pcapng
    ```
    Verify the adapter status reports `SafetyTier::PassiveListenOnly`.
 
@@ -43,7 +53,10 @@ Follow these steps when diagnosing an unknown cabinet:
    Examine active node IDs, polling frequencies, and register values in the terminal table.
 
 5. **Execute Compliance Audit:**  
-   Review physical link warnings (e.g., termination resistor missing or wire polarity swapped).
+   Review physical link warnings (e.g., termination resistor missing or wire polarity swapped):
+   ```bash
+   fp audit
+   ```
 
 6. **Export Field Artifacts:**  
    Generate standard configurations for PLC/SCADA systems:
@@ -59,6 +72,18 @@ Follow these steps when diagnosing an unknown cabinet:
 ## 4. Interactive Terminal Dashboard (TUI)
 
 Executing `fp dashboard` launches the full-screen terminal user interface powered by `ratatui` and `crossterm`:
+
+```bash
+# Launch interactive dashboard on default interface:
+fp dashboard
+
+# Launch interactive dashboard on specific hardware interface:
+fp dashboard --interface can0
+
+# Launch interactive dashboard in replay mode from recorded trace:
+fp dashboard --replay sample_run.candump
+```
+
 
 - **System Header:** Shows live version, safety tier status, Zero-TX verification, bus lock state, discovered register counts, active CAN nodes, and periodic broadcast loops.
 - **Tab 1 — Register Catalog:** Real-time table of discovered Modbus holding registers, raw hex, polling frequency (Hz), jitter (ms), inferred data representation, and statistical confidence score.

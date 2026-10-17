@@ -139,11 +139,42 @@ data: {"interface_id":"can0","timestamp_us":1024000,"link_params":{"Can":{"bitra
 
 ---
 
-### 3.6 SCADA Artifact Export (`GET /api/v1/export/{format}`)
+### 3.6 Compliance and Link Audit (`GET /api/v1/audit`)
 
-Exports the active register catalog and signals directly into standard SCADA configurations:
-- `GET /api/v1/export/dbc` — Vector CAN database definition
-- `GET /api/v1/export/pcapng` — Wireshark network trace
-- `GET /api/v1/export/telegraf` — InfluxDB Line Protocol
-- `GET /api/v1/export/nodered` — Node-RED IoT gateway flow
-- `GET /api/v1/export/json` — JSON register catalog
+Returns aggregated protocol compliance metrics, link health score, CRC error counts, and diagnostic issues identified by the compliance engine.
+
+**Request:**
+```http
+GET /api/v1/audit HTTP/1.1
+Host: localhost:8080
+```
+
+**Response (200 OK):**
+```json
+{
+  "total_frames_analyzed": 1420,
+  "crc_errors": 0,
+  "protocol_violations": 1,
+  "link_health_score": 0.99,
+  "issues": [
+    {
+      "severity": "Warning",
+      "category": "ProtocolViolation",
+      "description": "Modbus query address span overflow (start: 65530, count: 10 > 65536)",
+      "recommendation": "Verify PLC register map address configuration"
+    }
+  ]
+}
+```
+
+---
+
+### 3.7 SCADA Artifact Export (`GET /api/v1/export/{format}`)
+
+Exports the active register catalog and captured signals directly into standard SCADA configurations:
+- `GET /api/v1/export/dbc` — Vector CAN database definition (`text/plain; charset=utf-8`).
+- `GET /api/v1/export/pcapng` — Binary Wireshark network trace (`application/vnd.tcpdump.pcap`). Returns raw Section Header Block magic bytes `0x0A 0x0D 0x0D 0x0A`.
+- `GET /api/v1/export/telegraf` — InfluxDB Line Protocol metrics (`text/plain; charset=utf-8`).
+- `GET /api/v1/export/nodered` — Node-RED IoT gateway flow configuration (`application/json`).
+- `GET /api/v1/export/json` — Complete JSON register catalog (`application/json`).
+

@@ -104,3 +104,33 @@ Audit serial line timing and inter-frame intervals directly from the command lin
 ```bash
 cargo run -p fp-cli -- audit
 ```
+
+---
+
+## 6. Unknown Protocol Sequence Framer (Netzob Heuristics)
+
+When proprietary or uncataloged serial protocols operate on the bus, `fp-autodetect::UnknownFramer` applies sequence alignment and statistical column entropy analysis:
+
+### 6.1 Silence-Delimited Clustering (`cluster_by_silence`)
+
+Partitions timestamped raw byte slices into distinct frame candidates.  
+When the time delta between two consecutive byte chunks exceeds the configured threshold ($t_{\text{silence}}$, e.g. 3.5 character times or custom interval), the framer demarcates a packet boundary.
+
+### 6.2 Statistical Matrix Variance Analysis (`analyze_frame_matrix`)
+
+The engine aligns detected frames into a two-dimensional byte matrix and computes statistical variance for each byte column position ($k$):
+
+$$\text{Variance}_k = \frac{1}{N} \sum_{i=1}^{N} \left(\frac{\text{Byte}_{i,k}}{255.0} - \mu_k\right)^2$$
+
+Columns are classified into distinct structural categories:
+- **Static / Constant Columns ($\text{Variance} = 0.0$):**  
+  Identifies unchanging bytes. These represent candidate protocol preambles, sync words (e.g., `0x55 0xFF`), or fixed operation codes.
+- **Low Variance Columns ($0.0 < \text{Variance} < 0.15$):**  
+  Identifies incrementally changing bytes. These represent candidate packet sequence counters, rolling transaction IDs, or node addresses.
+- **Dynamic Payload Columns ($\text{Variance} \ge 0.15$):**  
+  Identifies high-entropy bytes. These represent analog sensor measurements, variable payloads, or cryptographic/CRC checksums.
+
+### 6.3 Raw Contiguous Stream Inference (`infer_from_raw_stream`)
+
+When hardware timestamp markers are unavailable, `infer_from_raw_stream` searches a contiguous byte buffer for repeating delimiters (e.g. `\r\n`, `0x7E`, `0x55`) or repeating fixed-length stride patterns to hypothesize frame boundaries.
+

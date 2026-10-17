@@ -58,8 +58,17 @@ pub trait BusInterface: Send + Sync {
   Interfaces with Linux native `can0`/`vcan0` devices.  
   Enforces kernel listen-only socket flags and translates Linux `<linux/can/error.h>` bitmasks into structured `BusErrorFlags`.
 
+- **Asynchronous Driver Background Loops:**  
+  All hardware drivers initiate a non-blocking background reader task (`tokio::spawn`) upon connection.  
+  The background loop receives raw frames from the physical bus, attaches microsecond timestamps, formats `RawBusEvent` records, and broadcasts them across the internal bus channel.
+
 - **Unified Dongle Enumeration (`fp_hal::enumerate_dongles`):**  
   Scans operating system serial and CAN interfaces. Maps USB vendor/product IDs (VID/PID) to industrial interface chips (FTDI FT232, CH340, CP2102, CANable STM32, GS-USB) and reports hardware listen-only capabilities.
+
+- **Asynchronous File Replay Streaming (`spawn_file_replay`):**  
+  Spawns an async task that streams parsed events from `.candump` or `.pcapng` files into the broadcast channel.  
+  This provides deterministic simulation for offline field testing and continuous integration without physical dongles.
+
 
 ---
 

@@ -71,8 +71,8 @@ impl ServerState {
     }
 
     pub fn handle_dongles(&self) -> serde_json::Value {
-        let list = self
-            .dongles
+        let dongles = fp_hal::enumerate_dongles();
+        let list = dongles
             .iter()
             .map(|d| {
                 json!({
@@ -118,23 +118,34 @@ impl ServerState {
         })
     }
 
-    pub async fn handle_export(&self, format: &str) -> (&'static str, String) {
+    pub async fn handle_audit(&self) -> serde_json::Value {
+        let report = self.compliance_report.read().await;
+        json!({
+            "total_frames_analyzed": report.total_frames_analyzed,
+            "crc_errors": report.crc_error_count,
+            "protocol_violations": report.protocol_violation_count,
+            "link_health_score": report.link_health_score,
+            "issues": report.issues
+        })
+    }
+
+    pub async fn handle_export(&self, format: &str) -> (&'static str, Vec<u8>) {
         let engine = self.inference_engine.read().await;
         match format.to_lowercase().as_str() {
-            "dbc" => ("text/plain; charset=utf-8", fp_inference::export_dbc(&[])),
+            "dbc" => ("text/plain; charset=utf-8", fp_inference::export_dbc(&[]).into_bytes()),
             "pcapng" => (
                 "application/vnd.tcpdump.pcap",
-                String::from_utf8_lossy(&fp_inference::export_pcapng(&[])).to_string(),
+                fp_inference::export_pcapng(&[]),
             ),
             "telegraf" => (
                 "text/plain; charset=utf-8",
-                fp_inference::export_telegraf(&engine.catalog),
+                fp_inference::export_telegraf(&engine.catalog).into_bytes(),
             ),
             "nodered" => (
                 "application/json",
-                fp_inference::export_nodered_flow(&engine.catalog),
+                fp_inference::export_nodered_flow(&engine.catalog).into_bytes(),
             ),
-            _ => ("application/json", fp_inference::export_json(&engine.catalog)),
+            _ => ("application/json", fp_inference::export_json(&engine.catalog).into_bytes()),
         }
     }
 }
