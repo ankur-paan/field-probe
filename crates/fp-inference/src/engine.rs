@@ -5,11 +5,13 @@ use fp_crypto::{
     auto_decrypt_payload, calculate_shannon_entropy, is_high_entropy_payload, KeyRing,
 };
 use fp_dissectors::{
-    dissect_autosar_nm, dissect_canopen, dissect_ccp, dissect_j1939, dissect_obd2, dissect_uds,
-    dissect_xcp, parse_j1939_header, BacnetMstpFrame, CanOpenPayload, Dnp3Frame, IsoTpReassembler,
-    J1939Payload, J1939TransportReassembler, ModbusPdu, ModbusRtuAdu, Obd2Message, UdsMessage,
-    PGN_ADDRESS_CLAIMED, PGN_COMPONENT_ID, PGN_DM1, PGN_EEC1, PGN_ET1, PGN_TP_CM, PGN_TP_DT,
-    PGN_VIN,
+    dissect_autosar_nm, dissect_canopen, dissect_ccp, dissect_devicenet, dissect_j1939,
+    dissect_obd2, dissect_uds, dissect_xcp, parse_j1939_header, BacnetMstpFrame, BacnetService,
+    CanOpenPayload, DeviceNetPayload, Dnp3Frame, IsoTpReassembler, J1587Parameter, J1708Message,
+    J1939Payload, J1939TransportReassembler, KnxMessage, MbusMessage, ModbusPdu, ModbusRtuAdu,
+    Obd2Message, UdsMessage, PGN_ADDRESS_CLAIMED, PGN_COMPONENT_ID, PGN_DM1, PGN_EEC1, PGN_ET1,
+    PGN_NMEA_BATTERY_STATUS, PGN_NMEA_ENGINE_DYNAMIC, PGN_NMEA_ENGINE_RAPID, PGN_NMEA_FLUID_LEVEL,
+    PGN_TP_CM, PGN_TP_DT, PGN_VIN,
 };
 use serde::{Deserialize, Serialize};
 
@@ -405,6 +407,87 @@ impl InferenceEngine {
                                 confidence: 1.0,
                             });
                         }
+                        J1939Payload::NmeaEngineRapid {
+                            engine_instance,
+                            engine_speed_rpm,
+                            boost_pressure_kpa,
+                            tilt_trim_percent,
+                        } => {
+                            self.catalog.insert_or_update(InferredRegisterEntry {
+                                node_or_slave: node_str.clone(),
+                                address: PGN_NMEA_ENGINE_RAPID,
+                                polling_frequency_hz: hz,
+                                jitter_ms: jitter,
+                                raw_hex: format!("{:02X?}", &processed_frame.data[..]),
+                                plausible_type: format!(
+                                    "NMEA2000 Rapid: Inst={}, RPM={:.2}, Boost={:.1} kPa, Trim={}%",
+                                    engine_instance,
+                                    engine_speed_rpm,
+                                    boost_pressure_kpa,
+                                    tilt_trim_percent
+                                ),
+                                confidence: 1.0,
+                            });
+                        }
+                        J1939Payload::NmeaEngineDynamic {
+                            engine_instance,
+                            oil_pressure_kpa,
+                            alternator_voltage,
+                            fuel_rate_l_per_h,
+                            total_hours,
+                            ..
+                        } => {
+                            self.catalog.insert_or_update(InferredRegisterEntry {
+                                node_or_slave: node_str.clone(),
+                                address: PGN_NMEA_ENGINE_DYNAMIC,
+                                polling_frequency_hz: hz,
+                                jitter_ms: jitter,
+                                raw_hex: format!("{:02X?}", &processed_frame.data[..]),
+                                plausible_type: format!(
+                                    "NMEA2000 Dynamic: Inst={}, Oil={:.1} kPa, Alt={:.2} V, Fuel={:.1} L/h, Hours={:.2} h",
+                                    engine_instance, oil_pressure_kpa, alternator_voltage, fuel_rate_l_per_h, total_hours
+                                ),
+                                confidence: 1.0,
+                            });
+                        }
+                        J1939Payload::NmeaFluidLevel {
+                            fluid_type,
+                            instance,
+                            level_percent,
+                            capacity_liters,
+                        } => {
+                            self.catalog.insert_or_update(InferredRegisterEntry {
+                                node_or_slave: node_str.clone(),
+                                address: PGN_NMEA_FLUID_LEVEL,
+                                polling_frequency_hz: hz,
+                                jitter_ms: jitter,
+                                raw_hex: format!("{:02X?}", &processed_frame.data[..]),
+                                plausible_type: format!(
+                                    "NMEA2000 Fluid: Type={}, Inst={}, Level={:.1}%, Cap={:?}",
+                                    fluid_type, instance, level_percent, capacity_liters
+                                ),
+                                confidence: 1.0,
+                            });
+                        }
+                        J1939Payload::NmeaBatteryStatus {
+                            battery_instance,
+                            voltage_volts,
+                            current_amps,
+                            temperature_deg_c,
+                        } => {
+                            self.catalog.insert_or_update(InferredRegisterEntry {
+                                node_or_slave: node_str.clone(),
+                                address: PGN_NMEA_BATTERY_STATUS,
+                                polling_frequency_hz: hz,
+                                jitter_ms: jitter,
+                                raw_hex: format!("{:02X?}", &processed_frame.data[..]),
+                                plausible_type: format!(
+                                    "NMEA2000 Battery: Inst={}, Volts={:.2} V, Amps={:?}, Temp={:?}",
+                                    battery_instance, voltage_volts, current_amps, temperature_deg_c
+                                ),
+                                confidence: 1.0,
+                            });
+                        }
                         _ => {}
                     }
                 }
@@ -564,6 +647,39 @@ impl InferenceEngine {
                         confidence: 1.0,
                     });
                 }
+            }
+        }
+
+        // F. ODVA DeviceNet CIP-over-CAN
+        if let fp_core::CanId::Standard(cob_id) = processed_frame.id {
+            if let Some(devicenet) = dissect_devicenet(cob_id as u32, &processed_frame.data) {
+                let (hz, jitter) = self.histogram_engine.get_node_timing(processed_frame.id);
+                let node_str = format!("DeviceNet:Node{}", devicenet.mac_id.unwrap_or(0));
+                let desc = match &devicenet.payload {
+                    DeviceNetPayload::ExplicitMessage { service_name, .. } => {
+                        format!("DeviceNet Explicit: {}", service_name)
+                    }
+                    DeviceNetPayload::FragmentedExplicit { header, .. } => {
+                        format!("DeviceNet Frag: {}", header.fragment_type_name)
+                    }
+                    DeviceNetPayload::PollIoData { message_type, .. } => {
+                        format!("DeviceNet Poll: {:?}", message_type)
+                    }
+                    DeviceNetPayload::BitStrobeCommand { .. } => "DeviceNet Bit-Strobe".to_string(),
+                    DeviceNetPayload::NetworkManagement { description, .. } => {
+                        format!("DeviceNet NetMgmt: {}", description)
+                    }
+                    DeviceNetPayload::Generic { .. } => "DeviceNet Frame".to_string(),
+                };
+                self.catalog.insert_or_update(InferredRegisterEntry {
+                    node_or_slave: node_str,
+                    address: cob_id as u32,
+                    polling_frequency_hz: hz,
+                    jitter_ms: jitter,
+                    raw_hex: format!("{:02X?}", &processed_frame.data[..]),
+                    plausible_type: desc,
+                    confidence: 0.95,
+                });
             }
         }
 
@@ -790,21 +906,176 @@ impl InferenceEngine {
     /// Ingest a dissected BACnet MS/TP frame into the semantic inference catalog
     pub fn ingest_bacnet_frame(&mut self, frame: &BacnetMstpFrame, _timestamp_us: u64) {
         let node_str = format!("BACnet:{}", frame.source_address);
-        let addr = ((frame.frame_type as u32) << 8) | (frame.destination_address as u32);
+        if let Some(apdu) = &frame.apdu {
+            match &apdu.service {
+                BacnetService::ReadPropertyAck {
+                    object,
+                    property_id,
+                    property_name,
+                    value,
+                    ..
+                } => {
+                    let addr = (object.instance << 8) | (property_id & 0xFF);
+                    let val_str = if let Some(v) = value {
+                        format!("{:.2}", v)
+                    } else {
+                        "Present".to_string()
+                    };
+                    self.catalog.insert_or_update(InferredRegisterEntry {
+                        node_or_slave: node_str.clone(),
+                        address: addr,
+                        polling_frequency_hz: 1.0,
+                        jitter_ms: 0.0,
+                        raw_hex: format!("{:02X?}", &frame.payload),
+                        plausible_type: format!(
+                            "BACnet {:?} #{}: {} = {}",
+                            object.object_type, object.instance, property_name, val_str
+                        ),
+                        confidence: 1.0,
+                    });
+                }
+                BacnetService::IAm {
+                    device_id,
+                    vendor_id,
+                    ..
+                } => {
+                    self.catalog.insert_or_update(InferredRegisterEntry {
+                        node_or_slave: node_str.clone(),
+                        address: *device_id,
+                        polling_frequency_hz: 1.0,
+                        jitter_ms: 0.0,
+                        raw_hex: format!("{:02X?}", &frame.payload),
+                        plausible_type: format!(
+                            "BACnet I-Am: Device #{}, Vendor ID {}",
+                            device_id, vendor_id
+                        ),
+                        confidence: 1.0,
+                    });
+                }
+                _ => {
+                    let addr =
+                        ((frame.frame_type as u32) << 8) | (frame.destination_address as u32);
+                    self.catalog.insert_or_update(InferredRegisterEntry {
+                        node_or_slave: node_str,
+                        address: addr,
+                        polling_frequency_hz: 1.0,
+                        jitter_ms: 0.0,
+                        raw_hex: format!(
+                            "Type:{} Dest:{}",
+                            frame.frame_type.name(),
+                            frame.destination_address
+                        ),
+                        plausible_type: format!("BACnet MS/TP APDU: {}", apdu.pdu_type_name),
+                        confidence: 1.0,
+                    });
+                }
+            }
+        } else {
+            let addr = ((frame.frame_type as u32) << 8) | (frame.destination_address as u32);
+            self.catalog.insert_or_update(InferredRegisterEntry {
+                node_or_slave: node_str,
+                address: addr,
+                polling_frequency_hz: 1.0,
+                jitter_ms: 0.0,
+                raw_hex: format!(
+                    "Type:{} Dest:{}",
+                    frame.frame_type.name(),
+                    frame.destination_address
+                ),
+                plausible_type: format!(
+                    "BACnet MS/TP: {} -> Dest {}",
+                    frame.frame_type.name(),
+                    frame.destination_address
+                ),
+                confidence: 1.0,
+            });
+        }
+    }
+
+    /// Ingest a dissected SAE J1708/J1587 frame into the semantic inference catalog
+    pub fn ingest_j1708_frame(&mut self, frame: &J1708Message, _timestamp_us: u64) {
+        let node_str = format!("J1708:{}", frame.mid);
+        for param in &frame.parameters {
+            let (addr, desc) = match param {
+                J1587Parameter::RoadSpeedKmh(v) => (84, format!("RoadSpeed: {:.2} km/h", v)),
+                J1587Parameter::AcceleratorPedalPercent(v) => {
+                    (91, format!("AcceleratorPedal: {:.1}%", v))
+                }
+                J1587Parameter::PercentEngineLoad(v) => (92, format!("EngineLoad: {:.1}%", v)),
+                J1587Parameter::EngineOilPressureKpa(v) => {
+                    (100, format!("OilPressure: {:.1} kPa", v))
+                }
+                J1587Parameter::BoostPressureKpa(v) => {
+                    (102, format!("BoostPressure: {:.1} kPa", v))
+                }
+                J1587Parameter::CoolantTemperatureDegC(v) => {
+                    (110, format!("CoolantTemp: {:.1} °C", v))
+                }
+                J1587Parameter::BatteryVoltageSwitched(v) => {
+                    (158, format!("BatterySwitched: {:.2} V", v))
+                }
+                J1587Parameter::BatteryVoltageUnswitched(v) => {
+                    (168, format!("BatteryUnswitched: {:.2} V", v))
+                }
+                J1587Parameter::EngineSpeedRpm(v) => (190, format!("EngineSpeed: {:.2} RPM", v)),
+                J1587Parameter::TotalDistanceKm(v) => (245, format!("TotalDistance: {:.1} km", v)),
+                J1587Parameter::TotalEngineHours(v) => (247, format!("TotalHours: {:.2} h", v)),
+                J1587Parameter::RawParameter { pid, data } => {
+                    (*pid as u32, format!("PID {}: {:02X?}", pid, data))
+                }
+            };
+            self.catalog.insert_or_update(InferredRegisterEntry {
+                node_or_slave: node_str.clone(),
+                address: addr,
+                polling_frequency_hz: 1.0,
+                jitter_ms: 0.0,
+                raw_hex: format!("MID:{} PID:{}", frame.mid, addr),
+                plausible_type: format!("J1587 {}: {}", frame.mid_name, desc),
+                confidence: 1.0,
+            });
+        }
+    }
+
+    /// Ingest a dissected M-Bus meter telegram into the semantic inference catalog
+    pub fn ingest_mbus_frame(&mut self, frame: &MbusMessage, _timestamp_us: u64) {
+        let node_str = format!("MBus:{}", frame.primary_address);
+        let (addr, desc) = if let Some(hdr) = &frame.fixed_header {
+            (
+                hdr.identification_number,
+                format!(
+                    "M-Bus {} #{}: Mfg={}, Medium={}",
+                    hdr.medium_name, hdr.identification_string, hdr.manufacturer, hdr.medium_name
+                ),
+            )
+        } else {
+            (
+                frame.primary_address as u32,
+                format!("M-Bus Frame (Control: 0x{:02X})", frame.control_field),
+            )
+        };
         self.catalog.insert_or_update(InferredRegisterEntry {
             node_or_slave: node_str,
             address: addr,
             polling_frequency_hz: 1.0,
             jitter_ms: 0.0,
-            raw_hex: format!(
-                "Type:{} Dest:{}",
-                frame.frame_type.name(),
-                frame.destination_address
-            ),
+            raw_hex: format!("{:02X?}", &frame.payload),
+            plausible_type: desc,
+            confidence: 1.0,
+        });
+    }
+
+    /// Ingest a dissected KNX TP1 telegram into the semantic inference catalog
+    pub fn ingest_knx_frame(&mut self, frame: &KnxMessage, _timestamp_us: u64) {
+        let node_str = format!("KNX:{}", frame.source_address_str);
+        self.catalog.insert_or_update(InferredRegisterEntry {
+            node_or_slave: node_str,
+            address: frame.destination_address_raw as u32,
+            polling_frequency_hz: 1.0,
+            jitter_ms: 0.0,
+            raw_hex: format!("{:02X?}", &frame.payload),
             plausible_type: format!(
-                "BACnet MS/TP: {} -> Dest {}",
-                frame.frame_type.name(),
-                frame.destination_address
+                "KNX -> {} Service={:?}, Payload={:02X?}",
+                frame.destination_address_str, frame.service, frame.payload
             ),
             confidence: 1.0,
         });
@@ -1171,6 +1442,7 @@ mod tests {
             header_crc: 0,
             payload: vec![],
             data_crc: None,
+            apdu: None,
         };
         engine.ingest_bacnet_frame(&bacnet_frame, 1_000_000);
 
@@ -1179,8 +1451,201 @@ mod tests {
             .entries
             .get("BACnet:5:10")
             .expect("BACnet entry");
-        assert!(bac_entry.plausible_type.contains("Token Pass"));
+        assert!(bac_entry.plausible_type.contains("Token"));
         assert_eq!(bac_entry.confidence, 1.0);
+    }
+
+    #[test]
+    fn test_inference_engine_nmea2000_populates_catalog() {
+        let mut engine = InferenceEngine::new(250_000, 1000);
+
+        // NMEA 2000 Engine Rapid Update PGN 127488 (0x1F200) on 0x0DF20005 (SA 0x05)
+        // Instance: 0, Speed: 2500 RPM (10000 = 0x2710 -> 0x10, 0x27), Boost: 15.0 kPa (150 = 0x96 -> 0x96, 0x00), Trim: 50%
+        let data_rapid = [0x00, 0x10, 0x27, 0x96, 0x00, 0x32, 0xFF, 0xFF];
+        let f_rapid = CanFrame::new_extended(0x0DF20005, &data_rapid);
+        engine.ingest_can_frame(&f_rapid, 1_000_000);
+
+        let rapid_entry = engine
+            .catalog
+            .entries
+            .get("J1939:0x05:127488")
+            .expect("NMEA 2000 Rapid entry");
+        assert!(rapid_entry.plausible_type.contains("NMEA2000 Rapid"));
+        assert!(rapid_entry.plausible_type.contains("RPM=2500.00"));
+        assert!(rapid_entry.plausible_type.contains("Boost=15.0 kPa"));
+
+        // NMEA 2000 Fluid Level PGN 127505 (0x1F211) on 0x0DF21105 (SA 0x05)
+        // Type: 0 (Fuel), Instance: 1, Level: 75.0% (18750 = 0x493E -> 0x3E, 0x49), Capacity: 500 L
+        let data_fluid = [0x10, 0x3E, 0x49, 0xF4, 0x01, 0x00, 0x00, 0xFF];
+        let f_fluid = CanFrame::new_extended(0x0DF21105, &data_fluid);
+        engine.ingest_can_frame(&f_fluid, 1_010_000);
+
+        let fluid_entry = engine
+            .catalog
+            .entries
+            .get("J1939:0x05:127505")
+            .expect("NMEA 2000 Fluid entry");
+        assert!(fluid_entry.plausible_type.contains("NMEA2000 Fluid"));
+        assert!(fluid_entry.plausible_type.contains("Type=Fuel"));
+        assert!(fluid_entry.plausible_type.contains("Level=75.0%"));
+    }
+
+    #[test]
+    fn test_inference_engine_devicenet_populates_catalog() {
+        let mut engine = InferenceEngine::new(500_000, 1000);
+
+        // DeviceNet 11-bit CAN: Group 2 Message 6 (Slave Poll Response) for MAC ID 10
+        // CAN ID: 0x400 | (10 << 3) | 6 = 0x456 (1110)
+        let f_dnet = CanFrame::new_standard(0x456, &[0xDE, 0xAD, 0xBE, 0xEF]);
+        engine.ingest_can_frame(&f_dnet, 1_000_000);
+
+        let dnet_entry = engine
+            .catalog
+            .entries
+            .get("DeviceNet:Node10:1110")
+            .expect("DeviceNet entry");
+        assert!(dnet_entry.plausible_type.contains("DeviceNet Poll"));
+        assert_eq!(dnet_entry.confidence, 0.95);
+    }
+
+    #[test]
+    fn test_inference_engine_j1708_populates_catalog() {
+        let mut engine = InferenceEngine::new(500_000, 1000);
+
+        let j1708_msg = J1708Message {
+            mid: 128,
+            mid_name: "Engine #1".to_string(),
+            parameters: vec![
+                J1587Parameter::RoadSpeedKmh(88.5),
+                J1587Parameter::EngineSpeedRpm(1800.0),
+                J1587Parameter::CoolantTemperatureDegC(85.0),
+            ],
+            checksum_valid: true,
+        };
+        engine.ingest_j1708_frame(&j1708_msg, 1_000_000);
+
+        let speed_entry = engine
+            .catalog
+            .entries
+            .get("J1708:128:84")
+            .expect("J1708 Speed entry");
+        assert!(speed_entry.plausible_type.contains("RoadSpeed: 88.50 km/h"));
+
+        let rpm_entry = engine
+            .catalog
+            .entries
+            .get("J1708:128:190")
+            .expect("J1708 RPM entry");
+        assert!(rpm_entry
+            .plausible_type
+            .contains("EngineSpeed: 1800.00 RPM"));
+
+        let temp_entry = engine
+            .catalog
+            .entries
+            .get("J1708:128:110")
+            .expect("J1708 Temp entry");
+        assert!(temp_entry.plausible_type.contains("CoolantTemp: 85.0 °C"));
+    }
+
+    #[test]
+    fn test_inference_engine_bacnet_apdu_populates_catalog() {
+        let mut engine = InferenceEngine::new(500_000, 1000);
+
+        let bacnet_frame = BacnetMstpFrame {
+            frame_type: fp_dissectors::BacnetMstpFrameType::BacnetDataExpectingReply,
+            destination_address: 1,
+            source_address: 42,
+            data_length: 12,
+            header_crc: 0,
+            payload: vec![1, 2, 3],
+            data_crc: Some(0),
+            apdu: Some(fp_dissectors::BacnetApdu {
+                pdu_type: 3,
+                pdu_type_name: "Complex-ACK-PDU".to_string(),
+                invoke_id: Some(7),
+                service: BacnetService::ReadPropertyAck {
+                    object: fp_dissectors::BacnetObjectId {
+                        object_type: fp_dissectors::BacnetObjectType::AnalogInput,
+                        instance: 101,
+                    },
+                    property_id: 85,
+                    property_name: "present-value".to_string(),
+                    value: Some(23.75),
+                    raw_value: vec![0x41, 0xBD, 0x00, 0x00],
+                },
+            }),
+        };
+        engine.ingest_bacnet_frame(&bacnet_frame, 1_000_000);
+
+        // Address is (101 << 8) | 85 = 25941
+        let entry = engine
+            .catalog
+            .entries
+            .get("BACnet:42:25941")
+            .expect("BACnet APDU entry");
+        assert!(entry.plausible_type.contains("AnalogInput #101"));
+        assert!(entry.plausible_type.contains("present-value = 23.75"));
+    }
+
+    #[test]
+    fn test_inference_engine_mbus_and_knx_populates_catalog() {
+        let mut engine = InferenceEngine::new(500_000, 1000);
+
+        // M-Bus Heat Meter
+        let mbus_msg = MbusMessage {
+            frame_type: fp_dissectors::MbusFrameType::LongFrame,
+            control_field: 0x08,
+            primary_address: 5,
+            control_information: Some(0x72),
+            fixed_header: Some(fp_dissectors::MbusFixedHeader {
+                identification_number: 12345678,
+                identification_string: "12345678".to_string(),
+                manufacturer: "KAM".to_string(),
+                version: 1,
+                medium: fp_dissectors::MbusMedium::Heat,
+                medium_name: "Heat".to_string(),
+                access_counter: 10,
+                status: 0,
+                signature: 0,
+            }),
+            payload: vec![0x12, 0x34],
+            checksum_valid: true,
+        };
+        engine.ingest_mbus_frame(&mbus_msg, 1_000_000);
+
+        let mbus_entry = engine
+            .catalog
+            .entries
+            .get("MBus:5:12345678")
+            .expect("M-Bus entry");
+        assert!(mbus_entry.plausible_type.contains("Heat #12345678"));
+        assert!(mbus_entry.plausible_type.contains("Mfg=KAM"));
+
+        // KNX TP1 Telegram
+        let knx_msg = KnxMessage {
+            control_byte: 0xBC,
+            priority: fp_dissectors::KnxPriority::Low,
+            is_repeated: false,
+            source_address_raw: 0x1102,
+            source_address_str: "1.1.2".to_string(),
+            destination_address_raw: 0x0901,
+            destination_address_str: "1/1/1".to_string(),
+            is_group_address: true,
+            hop_count: 6,
+            service: fp_dissectors::KnxApciService::GroupValueWrite,
+            payload: vec![0x01],
+            checksum_valid: true,
+        };
+        engine.ingest_knx_frame(&knx_msg, 1_000_000);
+
+        let knx_entry = engine
+            .catalog
+            .entries
+            .get("KNX:1.1.2:2305") // 0x0901 = 2305
+            .expect("KNX entry");
+        assert!(knx_entry.plausible_type.contains("KNX -> 1/1/1"));
+        assert!(knx_entry.plausible_type.contains("GroupValueWrite"));
     }
 
     #[test]

@@ -88,3 +88,20 @@ The `fp-crypto` crate implements AUTOSAR E2E protection profiles to validate mes
 - **Counter Sequence Validation:** Tracks consecutive message counter values. Flags counter freezes, duplicate frames, and sequence jumps exceeding maximum allowed step size.
 - **E2E Notch Masking:** The `generate_e2e_notch_mask` function creates a 64-byte bitmask targeting the exact byte offsets of the CRC and rolling counter. When analyzing vehicle bus traffic during physical actuation tests, the differential capture session applies this mask to eliminate rolling safety counter noise from physical signal correlation.
 
+---
+
+## 9. Universal Multi-Protocol Register Catalog
+
+The `RegisterCatalog` aggregates telemetry across all industrial physical and application protocols into a unified semantic registry:
+
+- **Modbus RTU / TCP:** Ingests 16-bit register addresses (`Slave_ID:Address`) with Welford polling frequency and jitter metrics. Decodes MEI 0x2B device identification metadata.
+- **DNP3 (IEEE 1815):** Ingests substation point addresses (`DNP3:Source:Dest:Addr`) decoding Analog and Binary Inputs.
+- **SAE J1939 Powertrain:** Ingests PGN parameters (`J1939:SourceAddress:PGN`) with engine speed, percent load, torque, coolant temperature, fuel rate, and DTC records.
+- **NMEA 2000 Marine:** Ingests marine engine rapid update (`PGN 127488`), dynamic telemetry (`PGN 127489`), tank fluid levels (`PGN 127505`), and battery state (`PGN 127508`).
+- **ODVA DeviceNet:** Ingests 11-bit CAN MAC nodes (`DeviceNet:NodeID:CAN_ID`), decoding Master Polling I/O and fragmented CIP explicit attributes.
+- **SAE J1708 / J1587 Diesels:** Ingests physical parameter records (`J1708:MID:PID`), isolating road speed, engine RPM, coolant temperature, oil pressure, and odometer.
+- **Commercial BACnet MS/TP:** Ingests APDU property records (`BACnet:SourceAddress:Addr`), extracting IEEE float present-values and device instances.
+- **Meter-Bus (EN 13757 M-Bus):** Ingests utility meter telemetries (`MBus:PrimaryAddress:Serial`), decoding manufacturer acronyms and medium consumption counters.
+- **KNX TP1 Building Automation:** Ingests room automation telegrams (`KNX:SourceAddr:GroupAddr`), mapping lighting, climate, and occupancy status.
+
+

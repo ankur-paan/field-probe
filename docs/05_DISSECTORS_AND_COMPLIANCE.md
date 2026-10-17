@@ -13,8 +13,13 @@ It provides structured dissection for:
 - **ISO 15765-2 (ISO-TP):** Multi-frame CAN transport reassembly with sequence number checking and timeout eviction.
 - **ISO 14229 (UDS):** Unified Diagnostic Services session control, data identifier queries, security access, and negative response auditing.
 - **SAE J1939:** Single-frame PGN extraction plus multi-packet Transport Protocol (BAM & CMDT) reassembly for VIN, Component ID, and DM1 Active DTCs.
+- **NMEA 2000 & ISOBUS (ISO 11783):** Fast-Packet marine engine parameters and Extended Transport Protocol (`ETP.CM` / `ETP.DT`) up to 16 MB.
+- **ODVA DeviceNet:** 11-bit CAN ID Group 1–4 message grouping, Predefined Master/Slave I/O polling, and fragmented CIP explicit messaging.
+- **SAE J1708 / J1587:** Heavy-duty diesel serial framing, Message Identification (MID), and physical PID telemetry.
 - **CANopen:** NMT network management state transitions, Heartbeat, and SDO expedited upload/download protocols.
-- **BACnet MS/TP:** Master-Slave/Token-Passing token ring arbitration and application frame parsing.
+- **Commercial HVAC & Utility:** BACnet MS/TP APDU property access, Meter-Bus (EN 13757 M-Bus) utility meters, and KNX TP1 building automation.
+
+![Universal Fieldbus Expansion Matrix](./assets/fieldbus_matrix.svg)
 
 ---
 
@@ -195,3 +200,90 @@ Inspired by Zeek ICSNPP, the compliance auditor compares real-time bus traffic a
 - **Addressing Violations:** Detects requests spanning beyond valid 16-bit register address space ($start + quantity > 65536$).
 - **Quantity Limits:** Flags queries requesting illegal register counts ($> 125$ registers or $> 2000$ coils).
 - **Physical Link Health:** Measures transmission bit error rate, frame CRC error counts, and bus overload metrics.
+
+---
+
+## 13. Marine & Agricultural Engines (NMEA 2000 & ISOBUS)
+
+The engine provides zero-copy reassembly and decoding for marine and off-highway implements:
+
+- **NMEA 2000 Fast-Packet Reassembly (IEC 61162-3):**
+  - Reassembles multi-packet messages without requiring `TP.CM` handshake.
+  - Byte 0 carries a 3-bit sequence counter and a 5-bit frame index (`0x00` = First frame, `0x01..0x1F` = Subsequent frames).
+  - First frame carries payload length byte (`byte 1`) followed by up to 223 bytes total data.
+- **Marine Engine Telemetry PGNs:**
+  - `PGN 127488 (Engine Rapid Update)`: Engine Speed (0.25 rpm/bit), Boost Pressure (100 Pa/bit), Tilt/Trim.
+  - `PGN 127489 (Engine Dynamic Parameters)`: Oil pressure, oil temperature, coolant temperature, alternator voltage, fuel rate, and total engine hours.
+  - `PGN 127505 (Fluid Level)`: Fluid type (Fuel, Fresh Water, Waste Water, Live Well, Oil, Black Water), tank instance, and level percent (0.004 %/bit).
+  - `PGN 127508 (Battery Status)`: Battery instance, battery voltage (0.01 V/bit), current, and temperature.
+- **ISOBUS Extended Transport Protocol (ISO 11783-3 ETP):**
+  - Supports large agricultural implement prescriptions and task controller files up to 16 MB ($2^{24}-1$ bytes).
+  - Connection Management on `PGN 51200 (ETP.CM)` with control bytes: `ETP.RTS (0x14)`, `ETP.CTS (0x15)`, `ETP.DPO (0x16)`, `ETP.ACK (0x17)`, and `ETP.Abort (0xFF)`.
+  - Data Transfer on `PGN 50944 (ETP.DT)` with 3-byte sequence number (`bytes 1..3`) and 7 data bytes per packet.
+
+---
+
+## 14. ODVA DeviceNet Factory Automation
+
+DeviceNet maps Common Industrial Protocol (CIP) commands directly over 11-bit CAN:
+
+- **CAN ID Message Groups:**
+  - **Group 1 (`0x000..=0x3FF`):** High-priority I/O data channels (4-bit message ID, 6-bit MAC ID).
+  - **Group 2 (`0x400..=0x5FF`):** Predefined Master/Slave Connection Set (6-bit MAC ID, 3-bit message ID).
+  - **Group 3 (`0x600..=0x7BF`):** Unconnected Message Manager (UCMM) and explicit messaging.
+  - **Group 4 (`0x7C0..=0x7FF`):** Network management, Duplicate MAC ID checking, and offline connection recovery.
+- **Predefined Master/Slave Connection Set:**
+  - `Message 1`: Master Bit-Strobe Command (64 bits of run/idle flags, 1 bit per node).
+  - `Message 2`: Master Multicast Poll Command.
+  - `Message 3`: Master Explicit Request.
+  - `Message 4`: Slave Explicit Response.
+  - `Message 6`: Slave Poll Response.
+- **CIP Explicit Fragmentation:**
+  - Bit 7 (`frag`): Indicates fragmented transfer.
+  - Bit 6 (`frag_type`): `0 = First Fragment`, `1 = Subsequent Fragment`.
+  - Bits 5..0 (`frag_count`): Fragment sequence counter ($0..63$).
+
+---
+
+## 15. Legacy Heavy-Duty Diesels (SAE J1708 / J1587)
+
+The `fp-dissectors::j1708` engine parses asynchronous serial heavy-duty bus traffic:
+
+- **Hardware Framing:**
+  - Evaluates standard 9600 baud serial frames with standard start bit, 8 data bits, and 1 stop bit.
+  - Inter-frame demarcations require $\ge 2$ character times of silence.
+  - Trailing two's complement modulo-256 checksum validates message integrity under the zero-sum invariant.
+- **Message Identification Characters (MID):**
+  - MIDs classify physical controllers: MID 128 (Engine #1), MID 130 (Transmission), MID 136 (Brakes / ABS), MID 140 (Instrument Cluster), MID 142 (Vehicle Management System), MID 175 (Engine #2).
+- **SAE J1587 Parameter Identification (PID) Decoders:**
+  - `PID 84`: Road Speed ($0.5\text{ mph/bit} \rightarrow \text{km/h}$).
+  - `PID 91`: Percent Accelerator Pedal Position ($0.4\text{ \%/bit}$).
+  - `PID 92`: Percent Engine Load ($0.5\text{ \%/bit}$).
+  - `PID 100`: Engine Oil Pressure ($0.5\text{ psi/bit} \rightarrow \text{kPa}$).
+  - `PID 102`: Boost Pressure ($0.125\text{ psi/bit} \rightarrow \text{kPa}$).
+  - `PID 110`: Engine Coolant Temperature ($1\text{ }^\circ\text{F/bit} \rightarrow \text{ }^\circ\text{C}$).
+  - `PID 158 / 168`: Battery Potential Switched and Unswitched ($0.05\text{ V/bit}$).
+  - `PID 190`: Engine Speed ($0.25\text{ rpm/bit}$).
+  - `PID 245`: Total Vehicle Distance ($0.1\text{ miles/bit} \rightarrow \text{km}$).
+  - `PID 247`: Total Engine Hours ($0.05\text{ hours/bit}$).
+
+---
+
+## 16. Commercial HVAC, Metering, and Building Automation
+
+- **BACnet MS/TP Application Protocol Data Units (APDU):**
+  - Decodes Network Protocol Data Unit (NPDU) routing fields (control octet, DNET, SNET, hop count).
+  - Dissects APDU types: `ConfirmedRequest (0)`, `UnconfirmedRequest (1)`, `SimpleAck (2)`, `ComplexAck (3)`, `SegmentAck (4)`, `Error (5)`, `Reject (6)`, `Abort (7)`.
+  - Translates BACnet Object Types: AnalogInput (0), AnalogOutput (1), AnalogValue (2), BinaryInput (3), BinaryOutput (4), BinaryValue (5), Device (8), MultiStateInput (13), Schedule (17), TrendLog (20).
+  - Extracts IEEE 754 32-bit floating-point sensor values directly from `ReadPropertyAck` (Tag 4).
+  - Parses `Who-Is` broadcasts and `I-Am` device identification replies (Device ID, Vendor ID).
+- **Meter-Bus (EN 13757 M-Bus):**
+  - Classifies Short Frames (`0x10`), Control Frames (`0x68 03 03`), and Long Telegrams (`0x68 L L 0x68`).
+  - Decodes 12-byte fixed data header: BCD serial identification, 3-character manufacturer acronym (e.g., `KAM`, `DAN`, `LUG`), device version, and utility medium (Heat, Water, Electricity, Gas, Cooling).
+  - Evaluates 8-bit sum modulo 256 frame checksum.
+- **KNX TP1 Room Automation:**
+  - Dissects standard 9600 baud twisted-pair telegrams (`control byte 0xBC`).
+  - Extracts physical source individual addresses (`Area.Line.Device`) and destination group addresses (`Main/Middle/Sub`).
+  - Decodes APCI operations: GroupValueRead, GroupValueResponse, and GroupValueWrite.
+  - Validates longitudinal parity checksum (`XOR ^ 0xFF`).
+

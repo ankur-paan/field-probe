@@ -13,8 +13,8 @@ pub use crc::{
     verify_modbus_rtu_crc16,
 };
 pub use serial_hunter::{
-    calculate_silence_intervals, scan_bacnet_mstp_frames, scan_dnp3_frames,
-    scan_modbus_ascii_frames, scan_modbus_rtu_frames, score_serial_stream, SerialDetectionScore,
-    SerialProtocolCandidate, SerialSilenceIntervals, CANDIDATE_BAUD_RATES,
+    calculate_silence_intervals, scan_bacnet_mstp_frames, scan_dnp3_frames, scan_hart_frames,
+    scan_modbus_ascii_frames, scan_modbus_rtu_frames, scan_profibus_dp_frames, score_serial_stream,
+    SerialDetectionScore, SerialProtocolCandidate, SerialSilenceIntervals, CANDIDATE_BAUD_RATES,
 };
 pub use unknown_framer::{FieldType, FrameStructureHypothesis, InferredField, UnknownFramer};
