@@ -55,3 +55,14 @@ When correlating physical control actions (switches, relays, valves) against bus
 - **Baseline Learning & Auto-Notching:** The session monitors ambient bus traffic before the operator actuates the device. Bits that oscillate on their own (analog noise, timestamps, rolling sequence counters) are automatically accumulated into a notch mask.
 - **Delta Isolation:** When the operator flips the physical switch, the engine compares the current snapshot against baseline, bitwise-masking out all notched ambient bits (`active_diff = raw_diff & !notch_mask`).
 - **Precision Pinpointing:** Only genuine bits directly caused by the physical actuation are emitted in the `DiffCaptureReport`.
+
+---
+
+## 6. CAN-FD Dual-Bitrate Load & 64-Byte Notching (ISO 11898-1:2015)
+
+The inference engine fully supports Flexible Data-Rate (CAN-FD) traffic up to 64-byte payloads:
+
+- **Dual-Bitrate Bus Load Modeling:** Computes wire bit-duration accounting for nominal arbitration phase (typically 500 kbps) and accelerated data phase (typically 2 Mbps or 5 Mbps). Applies ISO 11898-1:2015 CRC polynomials: 17-bit CRC for payloads $\le 16$ bytes and 21-bit CRC for payloads $20 \dots 64$ bytes, including fixed stuff bits and dynamic bit-stuffing approximation.
+- **BRS & ESI Telemetry:** Captures Bit Rate Switch (`brs`) and Error State Indicator (`esi`) flags across all physical and replay frames.
+- **64-Byte Sniffer & Differential Isolation:** `SnifferSlot` and `DiffCaptureSession` track full 64-byte arrays without heap reallocation, enabling real-time bitwise delta isolation and ambient noise notching across high-density automotive ECUs.
+
