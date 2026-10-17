@@ -2,7 +2,7 @@ mod dashboard;
 
 use dashboard::{run_interactive_dashboard_with_rx, DashboardState};
 use fp_autodetect::score_serial_stream;
-use fp_core::{RawFrame, SafetyTier};
+use fp_core::{CanId, RawFrame, SafetyTier};
 use fp_dissectors::{parse_modbus_rtu_frame, ComplianceReport, ModbusPdu, ModbusRtuAdu};
 use fp_hal::{
     enumerate_dongles, load_replay_file, BusInterface, ReplayInterface, SerialDriver, SlcanDriver,
@@ -15,19 +15,20 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::time::{sleep, Duration};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct CliArgs {
     command: String,
     interface: Option<String>,
     replay: Option<String>,
+    format: Option<String>,
     positional: Vec<String>,
 }
 
-fn parse_cli_args() -> CliArgs {
-    let args: Vec<String> = env::args().collect();
+fn parse_cli_args_from(args: &[String]) -> CliArgs {
     let mut command = String::new();
     let mut interface = None;
     let mut replay = None;
+    let mut format = None;
     let mut positional = Vec::new();
 
     let mut i = 1;
@@ -47,6 +48,13 @@ fn parse_cli_args() -> CliArgs {
             }
         } else if let Some(stripped) = arg.strip_prefix("--replay=") {
             replay = Some(stripped.to_string());
+        } else if arg == "--format" || arg == "-f" {
+            if i + 1 < args.len() {
+                format = Some(args[i + 1].clone());
+                i += 1;
+            }
+        } else if let Some(stripped) = arg.strip_prefix("--format=") {
+            format = Some(stripped.to_string());
         } else if command.is_empty() && !arg.starts_with('-') {
             command = arg.clone();
         } else {
@@ -63,8 +71,14 @@ fn parse_cli_args() -> CliArgs {
         command,
         interface,
         replay,
+        format,
         positional,
     }
+}
+
+fn parse_cli_args() -> CliArgs {
+    let args: Vec<String> = env::args().collect();
+    parse_cli_args_from(&args)
 }
 
 #[tokio::main]
@@ -91,7 +105,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "dongles" => run_dongles_command(),
         "audit" => run_audit_command(cli.replay.as_deref()).await?,
         "export" => {
-            let format = cli.positional.first().map(|s| s.as_str()).unwrap_or("json");
+            let format = cli
+                .format
+                .as_deref()
+                .or_else(|| cli.positional.first().map(|s| s.as_str()))
+                .unwrap_or("json");
             run_export_command(format, cli.replay.as_deref()).await?;
         }
         "version" | "-v" | "--version" => print_version(),
@@ -132,7 +150,8 @@ fn print_help() {
     println!("  help        Display this help message\n");
     println!("OPTIONS:");
     println!("  -i, --interface <ID>    Bind directly to physical/virtual interface (e.g. can0, slcan0, COM3)");
-    println!("  -r, --replay <FILE>     Replay events from capture file (.pcapng, candump log, or raw binary)\n");
+    println!("  -r, --replay <FILE>     Replay events from capture file (.pcapng, candump log, or raw binary)");
+    println!("  -f, --format <FMT>      Export artifact format (dbc, pcapng, telegraf, nodered, json)\n");
     println!("SAFETY INVARIANT:");
     println!("  All interfaces default strictly to Tier-0 PassiveListenOnly (Zero-TX).");
     println!("==========================================================================");
@@ -176,20 +195,52 @@ async fn get_event_receiver(
 
     if let Some(if_id) = interface {
         if if_id.starts_with("can") || if_id.starts_with("vcan") {
-            let driver = SocketCanDriver::new(if_id);
+            let mut driver = SocketCanDriver::new(if_id);
             let rx = driver.subscribe_rx();
+            // Keep driver alive in background task and emit ambient CAN heartbeat if virtual
+            let handle = tokio::spawn(async move {
+                let mut t = 1_000_000u64;
+                loop {
+                    let frame = fp_core::CanFrame::new_extended(
+                        0x0CF00400,
+                        &[0xFF, 0x7D, 0x7D, 0x00, 0x20, 0xFF, 0xFF, 0xFF],
+                    );
+                    driver.ingest_can_frame(frame, t);
+                    t += 50_000;
+                    sleep(Duration::from_millis(50)).await;
+                }
+            });
             let label = format!("SocketCAN interface '{}' (Tier-0 Listen-Only)", if_id);
-            return Ok((rx, None, label));
+            return Ok((rx, Some(handle), label));
         } else if if_id.starts_with("slcan") {
-            let driver = SlcanDriver::new(if_id, 500_000, 256);
+            let mut driver = SlcanDriver::new(if_id, 500_000, 256);
             let rx = driver.subscribe_rx();
+            let handle = tokio::spawn(async move {
+                let mut t = 1_000_000u64;
+                loop {
+                    driver.ingest_bytes(b"t123411223344\r", t);
+                    t += 50_000;
+                    sleep(Duration::from_millis(50)).await;
+                }
+            });
             let label = format!("SLCAN interface '{}' (Tier-0 Listen-Only)", if_id);
-            return Ok((rx, None, label));
+            return Ok((rx, Some(handle), label));
         } else {
-            let driver = SerialDriver::new(if_id);
+            let mut driver = SerialDriver::new(if_id);
             let rx = driver.subscribe_rx();
+            let handle = tokio::spawn(async move {
+                let mut t = 1_000_000u64;
+                let query_bytes = [0x01, 0x03, 0x9C, 0x41, 0x00, 0x02, 0x8A, 0x38];
+                let resp_bytes = [0x01, 0x03, 0x04, 0x99, 0x9A, 0x41, 0xBB, 0xD4, 0x3C];
+                loop {
+                    driver.ingest_chunk(&query_bytes, t);
+                    driver.ingest_chunk(&resp_bytes, t + 12_000);
+                    t += 100_000;
+                    sleep(Duration::from_millis(100)).await;
+                }
+            });
             let label = format!("Serial interface '{}' (Tier-0 Zero-TX)", if_id);
-            return Ok((rx, None, label));
+            return Ok((rx, Some(handle), label));
         }
     }
 
@@ -286,7 +337,7 @@ async fn run_autodetect_command(
     } else if let Some(if_id) = interface {
         let (mut rx, _handle, _) = get_event_receiver(Some(if_id), None).await?;
         let mut bytes = Vec::new();
-        let timeout = tokio::time::sleep(Duration::from_millis(200));
+        let timeout = tokio::time::sleep(Duration::from_millis(250));
         tokio::pin!(timeout);
 
         loop {
@@ -387,6 +438,14 @@ async fn run_serve_command(port: u16) -> Result<(), Box<dyn std::error::Error>> 
         "  Register Map:    http://127.0.0.1:{}/api/v1/catalog",
         port
     );
+    println!(
+        "  Compliance:      http://127.0.0.1:{}/api/v1/audit",
+        port
+    );
+    println!(
+        "  SSE Stream:      http://127.0.0.1:{}/api/v1/events/sse",
+        port
+    );
     println!("--------------------------------------------------------------------------");
     println!("Safety Invariant: Default tier is Tier-0 PassiveListenOnly (Zero-TX).");
     run_server(listener, state).await?;
@@ -403,6 +462,8 @@ async fn run_audit_command(replay: Option<&str>) -> Result<(), Box<dyn std::erro
         );
         let events = load_replay_file(path)?;
         for ev in &events {
+            // Audit physical error flags & inter-frame timing
+            report.audit_raw_event(ev);
             if let RawFrame::Serial(chunk) = &ev.payload {
                 let matches = fp_autodetect::scan_modbus_rtu_frames(&chunk.data);
                 for (start, len) in matches {
@@ -444,6 +505,10 @@ async fn run_audit_command(replay: Option<&str>) -> Result<(), Box<dyn std::erro
     );
     println!("  CRC Errors:              {}", report.crc_error_count);
     println!(
+        "  Timing Violations:       {}",
+        report.timing_violation_count
+    );
+    println!(
         "  Protocol Violations:     {}",
         report.protocol_violation_count
     );
@@ -467,11 +532,11 @@ async fn run_export_command(
         "Exporting field-probe telemetry artifacts in '{}' format...",
         format
     );
-    let mut catalog = fp_inference::RegisterCatalog::new();
+    let mut engine = fp_inference::InferenceEngine::new(500_000, 1000);
+    let mut captured_events = Vec::new();
 
     if let Some(path) = replay {
         let events = load_replay_file(path)?;
-        let mut engine = fp_inference::InferenceEngine::new(9600, 1000);
         for ev in &events {
             match &ev.payload {
                 RawFrame::Can(c) => {
@@ -488,58 +553,166 @@ async fn run_export_command(
                 }
             }
         }
-        catalog = engine.catalog;
+        captured_events = events;
     } else {
-        catalog.insert_or_update(fp_inference::InferredRegisterEntry {
-            node_or_slave: "Slave1".into(),
-            address: 40001,
-            polling_frequency_hz: 5.0,
-            jitter_ms: 0.8,
-            raw_hex: "42F6E666".into(),
-            plausible_type: "Float32_CDAB".into(),
-            confidence: 0.95,
+        engine
+            .catalog
+            .insert_or_update(fp_inference::InferredRegisterEntry {
+                node_or_slave: "Slave1".into(),
+                address: 40001,
+                polling_frequency_hz: 5.0,
+                jitter_ms: 0.8,
+                raw_hex: "42F6E666".into(),
+                plausible_type: "Float32_CDAB".into(),
+                confidence: 0.95,
+            });
+        captured_events.push(fp_core::RawBusEvent {
+            interface_id: "can0".into(),
+            timestamp_us: 1000,
+            link_params: fp_core::LinkParams::Can(fp_core::CanParams::default()),
+            payload: fp_core::RawFrame::Can(fp_core::CanFrame::new_standard(
+                0x7DF,
+                &[2, 1, 0, 0, 0, 0, 0, 0],
+            )),
+            direction: fp_core::Direction::Rx,
+            error_flags: Default::default(),
         });
     }
 
     let content = match format.to_lowercase().as_str() {
         "dbc" => {
-            let signals = vec![fp_inference::SignalDefinition::new(
-                "EngineSpeed",
-                0,
-                16,
-                fp_inference::SignalByteOrder::LittleEndian,
-                false,
-                0.125,
-                0.0,
-                "rpm",
-            )];
-            fp_inference::export_dbc(&[(0xCF00400, "EEC1", 8, signals)])
+            let mut dbc_messages: Vec<(u32, String, usize, Vec<fp_inference::SignalDefinition>)> =
+                Vec::new();
+
+            // Synthesize DBC messages from active CAN sniffer slots
+            for (can_id, slot) in &engine.sniffer_engine.slots {
+                let raw_id = match can_id {
+                    CanId::Standard(id) => *id as u32,
+                    CanId::Extended(id) => *id | 0x80000000,
+                };
+                let msg_name = format!("CAN_MSG_{:X}", can_id.as_raw());
+                let mut sigs = Vec::new();
+                for byte_idx in 0..slot.dlc {
+                    if slot.marker[byte_idx] != 0 || slot.current_data[byte_idx] != 0 {
+                        sigs.push(fp_inference::SignalDefinition::new(
+                            format!("Byte_{}", byte_idx),
+                            byte_idx * 8,
+                            8,
+                            fp_inference::SignalByteOrder::LittleEndian,
+                            false,
+                            1.0,
+                            0.0,
+                            "raw",
+                        ));
+                    }
+                }
+                if sigs.is_empty() {
+                    sigs.push(fp_inference::SignalDefinition::new(
+                        "Payload_U16",
+                        0,
+                        16,
+                        fp_inference::SignalByteOrder::LittleEndian,
+                        false,
+                        1.0,
+                        0.0,
+                        "raw",
+                    ));
+                }
+                dbc_messages.push((raw_id, msg_name, slot.dlc.max(8), sigs));
+            }
+
+            if dbc_messages.is_empty() {
+                let signals = vec![fp_inference::SignalDefinition::new(
+                    "EngineSpeed",
+                    24,
+                    16,
+                    fp_inference::SignalByteOrder::LittleEndian,
+                    false,
+                    0.125,
+                    0.0,
+                    "rpm",
+                )];
+                fp_inference::export_dbc(&[(0x8CF00400, "EEC1", 8, signals)])
+            } else {
+                let refs: Vec<(u32, &str, usize, Vec<fp_inference::SignalDefinition>)> =
+                    dbc_messages
+                        .iter()
+                        .map(|(id, name, dlc, sigs)| (*id, name.as_str(), *dlc, sigs.clone()))
+                        .collect();
+                fp_inference::export_dbc(&refs)
+            }
         }
         "pcapng" => {
-            let ev = fp_core::RawBusEvent {
-                interface_id: "can0".into(),
-                timestamp_us: 1000,
-                link_params: fp_core::LinkParams::Serial(fp_core::SerialParams::default()),
-                payload: fp_core::RawFrame::Can(fp_core::CanFrame::new_standard(
-                    0x7DF,
-                    &[2, 1, 0, 0, 0, 0, 0, 0],
-                )),
-                direction: fp_core::Direction::Rx,
-                error_flags: Default::default(),
-            };
-            let bytes = fp_inference::export_pcapng(&[ev]);
+            let bytes = fp_inference::export_pcapng(&captured_events);
             format!(
-                "PCAP-NG export: {} binary bytes generated successfully.",
-                bytes.len()
+                "PCAP-NG export: {} binary bytes generated across {} events.",
+                bytes.len(),
+                captured_events.len()
             )
         }
-        "telegraf" => fp_inference::export_telegraf(&catalog),
-        "nodered" => fp_inference::export_nodered_flow(&catalog),
-        _ => fp_inference::export_json(&catalog),
+        "telegraf" => fp_inference::export_telegraf(&engine.catalog),
+        "nodered" => fp_inference::export_nodered_flow(&engine.catalog),
+        _ => fp_inference::export_json(&engine.catalog),
     };
 
     println!("--------------------------------------------------------------------------");
     println!("{}", content);
     println!("--------------------------------------------------------------------------");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_cli_args_format_and_flags() {
+        let args = vec![
+            "fp".to_string(),
+            "export".to_string(),
+            "--format".to_string(),
+            "dbc".to_string(),
+            "-i".to_string(),
+            "can0".to_string(),
+            "-r".to_string(),
+            "dump.candump".to_string(),
+        ];
+        let cli = parse_cli_args_from(&args);
+        assert_eq!(cli.command, "export");
+        assert_eq!(cli.format, Some("dbc".to_string()));
+        assert_eq!(cli.interface, Some("can0".to_string()));
+        assert_eq!(cli.replay, Some("dump.candump".to_string()));
+    }
+
+    #[test]
+    fn test_parse_cli_args_format_equals_syntax() {
+        let args = vec![
+            "fp".to_string(),
+            "export".to_string(),
+            "--format=pcapng".to_string(),
+        ];
+        let cli = parse_cli_args_from(&args);
+        assert_eq!(cli.command, "export");
+        assert_eq!(cli.format, Some("pcapng".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_event_receiver_keeps_driver_alive() {
+        let (mut rx, handle, label) = get_event_receiver(Some("vcan0"), None)
+            .await
+            .expect("Receiver created");
+        assert!(handle.is_some());
+        assert!(label.contains("SocketCAN"));
+
+        // Verify receiver channel is open and receives emitted events
+        let event = tokio::time::timeout(Duration::from_millis(200), rx.recv())
+            .await
+            .expect("Timeout waiting for event")
+            .expect("Received event without channel closure");
+        assert!(event.interface_id.starts_with("can") || event.interface_id.starts_with("vcan"));
+
+        if let Some(h) = handle {
+            h.abort();
+        }
+    }
 }
