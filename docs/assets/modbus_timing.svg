@@ -1,0 +1,27 @@
+<svg width="680" height="200" viewBox="0 0 680 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Grid background -->
+  <line x1="40" y1="130" x2="640" y2="130" stroke="#cbd5e1" stroke-width="1"/>
+
+  <!-- Silence segment 1 -->
+  <line x1="40" y1="130" x2="160" y2="130" stroke="#059669" stroke-width="3"/>
+  <text x="100" y="115" text-anchor="middle" fill="#059669" font-family="system-ui, sans-serif" font-weight="700" font-size="12">Silence &gt;= t3.5</text>
+  <text x="100" y="150" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="10">Frame Boundary</text>
+
+  <!-- Frame start edge -->
+  <line x1="160" y1="130" x2="160" y2="50" stroke="#2563eb" stroke-width="2"/>
+  <rect x="160" y="50" width="340" height="80" rx="4" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+  <text x="330" y="85" text-anchor="middle" fill="#1e40af" font-family="system-ui, sans-serif" font-weight="700" font-size="14">Modbus RTU Message ADU</text>
+  <text x="330" y="105" text-anchor="middle" fill="#334155" font-family="system-ui, sans-serif" font-size="11">[Slave ID 1B] [Function Code 1B] [Data N-Bytes] [CRC-16 2B]</text>
+
+  <!-- Gap indicator -->
+  <line x1="280" y1="50" x2="280" y2="130" stroke="#94a3b8" stroke-dasharray="3 3"/>
+  <text x="280" y="42" text-anchor="middle" fill="#dc2626" font-family="system-ui, sans-serif" font-size="10">Char Gap &lt;= t1.5</text>
+
+  <!-- Frame end edge -->
+  <line x1="500" y1="50" x2="500" y2="130" stroke="#2563eb" stroke-width="2"/>
+
+  <!-- Silence segment 2 -->
+  <line x1="500" y1="130" x2="640" y2="130" stroke="#059669" stroke-width="3"/>
+  <text x="570" y="115" text-anchor="middle" fill="#059669" font-family="system-ui, sans-serif" font-weight="700" font-size="12">Silence &gt;= t3.5</text>
+  <text x="570" y="150" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="10">Next Frame Sync</text>
+</svg>

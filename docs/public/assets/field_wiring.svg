@@ -1,0 +1,20 @@
+<svg width="660" height="200" viewBox="0 0 660 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="30" y="40" width="160" height="120" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="2"/>
+  <text x="110" y="75" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="700" font-size="13">Control Cabinet</text>
+  <text x="110" y="100" text-anchor="middle" fill="#334155" font-family="system-ui, sans-serif" font-size="11">PLC / Frequency Inverter</text>
+  <text x="110" y="125" text-anchor="middle" fill="#2563eb" font-family="system-ui, sans-serif" font-size="10">RS-485 Differential Pair (A/B)</text>
+
+  <path d="M190 100 H280" stroke="#2563eb" stroke-width="3"/>
+
+  <rect x="280" y="55" width="140" height="90" rx="6" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+  <text x="350" y="88" text-anchor="middle" fill="#1e40af" font-family="system-ui, sans-serif" font-weight="700" font-size="12">USB-RS485 Dongle</text>
+  <text x="350" y="108" text-anchor="middle" fill="#334155" font-family="system-ui, sans-serif" font-size="10">Passive Sniff Tap</text>
+  <text x="350" y="125" text-anchor="middle" fill="#059669" font-family="system-ui, sans-serif" font-size="9">DE/RE De-asserted</text>
+
+  <path d="M420 100 H500" stroke="#059669" stroke-width="2"/>
+
+  <rect x="500" y="40" width="130" height="120" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="2"/>
+  <text x="565" y="75" text-anchor="middle" fill="#0f172a" font-family="system-ui, sans-serif" font-weight="700" font-size="13">Field Laptop</text>
+  <text x="565" y="100" text-anchor="middle" fill="#059669" font-family="system-ui, sans-serif" font-weight="600" font-size="11">fp-cli (TUI)</text>
+  <text x="565" y="120" text-anchor="middle" fill="#64748b" font-family="system-ui, sans-serif" font-size="10">Auto-Detecting</text>
+</svg>

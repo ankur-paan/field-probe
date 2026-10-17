@@ -1,0 +1,21 @@
+[package]
+name = "fp-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+fp-core = { workspace = true }
+fp-hal = { workspace = true }
+fp-store = { workspace = true }
+fp-autodetect = { workspace = true }
+fp-dissectors = { workspace = true }
+fp-inference = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

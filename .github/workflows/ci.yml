@@ -1,0 +1,51 @@
+name: CI Quality Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust-checks:
+    name: Rust Quality Gate (Workspace)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Workspace Tests (Zero-Panic & Fuzz Verification)
+        run: cargo test --workspace --verbose
+
+      - name: Run Clippy (Zero Warnings Invariant)
+        run: cargo clippy --workspace -- -D warnings
+
+  docs-build:
+    name: React Vite Documentation Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: docs/package.json
+
+      - name: Install documentation dependencies
+        working-directory: docs
+        run: npm install
+
+      - name: Build static documentation
+        working-directory: docs
+        run: npm run build

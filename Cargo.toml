@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/fp-core",
+    "crates/fp-hal",
+    "crates/fp-store",
+    "crates/fp-autodetect",
+    "crates/fp-dissectors",
+    "crates/fp-crypto",
+    "crates/fp-inference",
+    "crates/fp-mcp",
+    "crates/fp-server",
+    "crates/fp-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["field-probe contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ankur-paan/field-probe"
+homepage = "https://github.com/ankur-paan/field-probe"
+
+[workspace.dependencies]
+# Internal workspace crates
+fp-core = { path = "crates/fp-core" }
+fp-hal = { path = "crates/fp-hal" }
+fp-store = { path = "crates/fp-store" }
+fp-autodetect = { path = "crates/fp-autodetect" }
+fp-dissectors = { path = "crates/fp-dissectors" }
+fp-crypto = { path = "crates/fp-crypto" }
+fp-inference = { path = "crates/fp-inference" }
+fp-mcp = { path = "crates/fp-mcp" }
+fp-server = { path = "crates/fp-server" }
+
+# Async runtime & concurrency
+tokio = { version = "1.38", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Serialization & formatting
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling & logging
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Data primitives & time
+chrono = { version = "0.4", features = ["serde"] }
+bytes = { version = "1.6", features = ["serde"] }
+
+# Parsing & validation
+nom = "7.1"
+
+# Testing & verification
+proptest = "1.4"

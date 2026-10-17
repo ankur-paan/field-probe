@@ -1,0 +1,26 @@
+[package]
+name = "fp-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fp"
+path = "src/main.rs"
+
+[dependencies]
+fp-core = { workspace = true }
+fp-hal = { workspace = true }
+fp-store = { workspace = true }
+fp-autodetect = { workspace = true }
+fp-dissectors = { workspace = true }
+fp-crypto = { workspace = true }
+fp-inference = { workspace = true }
+fp-mcp = { workspace = true }
+fp-server = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

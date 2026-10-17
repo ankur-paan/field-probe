@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "field-probe",
+  "compatibility_date": "2026-10-12",
+  "workers_dev": true,
+  "assets": {
+    "directory": "docs/dist"
+  },
+  "routes": [
+    {
+      "pattern": "fieldprobe.indramqtt.com",
+      "custom_domain": true
+    }
+  ]
+}
