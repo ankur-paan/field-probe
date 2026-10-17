@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Tool identifiers for the 8 core Model Context Protocol capabilities
+/// Tool identifiers for the 9 core Model Context Protocol capabilities
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum McpToolName {
     ListDongles,
@@ -38,7 +38,7 @@ pub struct McpToolDefinition {
     pub input_schema: serde_json::Value,
 }
 
-/// Return full schema definitions for all 8 MCP tools
+/// Return full schema definitions for all 9 MCP tools
 pub fn get_tool_definitions() -> Vec<McpToolDefinition> {
     vec![
         McpToolDefinition {
