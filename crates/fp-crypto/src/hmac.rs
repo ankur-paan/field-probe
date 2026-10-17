@@ -43,6 +43,7 @@ fn ssig1(x: u32) -> u32 {
 }
 
 /// Compute SHA-256 digest of input data
+#[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     let mut h0: u32 = 0x6a09e667;
     let mut h1: u32 = 0xbb67ae85;

@@ -65,6 +65,7 @@ impl InferenceEngine {
     }
 
     /// Process an incoming Modbus RTU frame
+    #[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
     pub fn ingest_modbus_frame(
         &mut self,
         adu: &ModbusRtuAdu,
