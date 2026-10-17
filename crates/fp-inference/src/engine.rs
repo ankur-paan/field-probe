@@ -926,7 +926,7 @@ impl InferenceEngine {
                         address: addr,
                         polling_frequency_hz: 1.0,
                         jitter_ms: 0.0,
-                        raw_hex: format!("{:02X?}", &frame.payload),
+                        raw_hex: format!("{:02X?}", frame.payload),
                         plausible_type: format!(
                             "BACnet {:?} #{}: {} = {}",
                             object.object_type, object.instance, property_name, val_str
@@ -944,7 +944,7 @@ impl InferenceEngine {
                         address: *device_id,
                         polling_frequency_hz: 1.0,
                         jitter_ms: 0.0,
-                        raw_hex: format!("{:02X?}", &frame.payload),
+                        raw_hex: format!("{:02X?}", frame.payload),
                         plausible_type: format!(
                             "BACnet I-Am: Device #{}, Vendor ID {}",
                             device_id, vendor_id
@@ -1058,7 +1058,7 @@ impl InferenceEngine {
             address: addr,
             polling_frequency_hz: 1.0,
             jitter_ms: 0.0,
-            raw_hex: format!("{:02X?}", &frame.payload),
+            raw_hex: format!("{:02X?}", frame.payload),
             plausible_type: desc,
             confidence: 1.0,
         });
@@ -1072,7 +1072,7 @@ impl InferenceEngine {
             address: frame.destination_address_raw as u32,
             polling_frequency_hz: 1.0,
             jitter_ms: 0.0,
-            raw_hex: format!("{:02X?}", &frame.payload),
+            raw_hex: format!("{:02X?}", frame.payload),
             plausible_type: format!(
                 "KNX -> {} Service={:?}, Payload={:02X?}",
                 frame.destination_address_str, frame.service, frame.payload
