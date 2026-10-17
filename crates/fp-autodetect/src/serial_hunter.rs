@@ -29,6 +29,7 @@ pub struct SerialDetectionScore {
     pub confidence: f32,
     pub valid_crc_count: usize,
     pub total_frames_scanned: usize,
+    pub unknown_hypothesis: Option<crate::unknown_framer::FrameStructureHypothesis>,
 }
 
 /// Sliding window CRC-16 scanner across raw byte buffers with byte-level resynchronization
@@ -216,10 +217,15 @@ pub fn score_serial_stream(buffer: &[u8], baud_rate: u32) -> SerialDetectionScor
         }
     }
 
-    let confidence = if best_count > 0 {
-        (best_count as f32 * 0.35).min(1.0)
+    let (confidence, unknown_hypothesis) = if best_count > 0 {
+        ((best_count as f32 * 0.35).min(1.0), None)
     } else {
-        0.0
+        let framer = crate::unknown_framer::UnknownFramer::new();
+        if let Some(hyp) = framer.infer_from_raw_stream(buffer) {
+            (hyp.confidence, Some(hyp))
+        } else {
+            (0.0, None)
+        }
     };
 
     SerialDetectionScore {
@@ -228,6 +234,7 @@ pub fn score_serial_stream(buffer: &[u8], baud_rate: u32) -> SerialDetectionScor
         confidence,
         valid_crc_count: best_count,
         total_frames_scanned: rtu_matches.len() + ascii_matches.len() + mstp_matches.len() + dnp3_matches.len(),
+        unknown_hypothesis,
     }
 }
 
@@ -324,6 +331,34 @@ mod tests {
         assert_eq!(score.candidate_protocol, SerialProtocolCandidate::ModbusAscii);
         assert_eq!(score.valid_crc_count, 1);
         assert!(score.confidence > 0.3);
+    }
+
+    #[test]
+    fn test_score_serial_stream_unknown_hypothesis() {
+        // Unknown proprietary protocol stream with repeating 8-byte frames:
+        // [0xAA, 0x55, node, seq, val_hi, val_lo, crc_hi, crc_lo]
+        // using CCITT CRC-16 (0x1021)
+        let mut stream = Vec::new();
+        for i in 0..6u8 {
+            let node = if i % 2 == 0 { 0x01 } else { 0x02 };
+            let val = (500 + (i as u16) * 10).to_be_bytes();
+            let mut frame = vec![0xAA, 0x55, node, i, val[0], val[1]];
+            let crc = crate::unknown_framer::compute_crc16_ccitt(&frame);
+            frame.extend_from_slice(&crc.to_be_bytes());
+            stream.extend_from_slice(&frame);
+        }
+
+        let score = score_serial_stream(&stream, 115200);
+        assert_eq!(score.candidate_protocol, SerialProtocolCandidate::Unknown);
+        assert!(score.unknown_hypothesis.is_some());
+        let hyp = score.unknown_hypothesis.unwrap();
+        assert_eq!(hyp.frame_length, 8);
+        assert_eq!(hyp.sample_preamble, vec![0xAA, 0x55]);
+        assert_eq!(
+            hyp.detected_crc_type,
+            Some("CRC-16/CCITT (0x1021)".to_string())
+        );
+        assert!(score.confidence > 0.7);
     }
 
     // Property-based fuzz test: random byte slices of any length up to 1024 bytes MUST NEVER PANIC
